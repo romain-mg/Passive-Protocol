@@ -4,6 +4,7 @@ pragma abicoder v2;
 
 import "@v3-periphery/libraries/TransferHelper.sol";
 import "@v3-periphery/interfaces/ISwapRouter.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract IndexFund {
     ISwapRouter public immutable swapRouter;
@@ -129,8 +130,6 @@ contract IndexFund {
             3000
         );
     }
-
-    // create pool via code or interface??
 
     // function burnShare(uint256 amount);
 
