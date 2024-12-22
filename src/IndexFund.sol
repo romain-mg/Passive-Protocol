@@ -2,8 +2,8 @@
 pragma solidity ^0.8.7;
 pragma abicoder v2;
 
-import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import "@v3-periphery/libraries/TransferHelper.sol";
+import "@v3-periphery/interfaces/ISwapRouter.sol";
 
 contract IndexFund {
     ISwapRouter public immutable swapRouter;
