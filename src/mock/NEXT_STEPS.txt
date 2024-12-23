@@ -1,0 +1,5 @@
+Next steps:
+- Voir quelle supply utiliser pour wbtc et eth
+- Trouver un moyen de calculer la marketcap de eth (voir si Chainlink donne de la data sur la total supply?)
+- Tester toutes mes fonctions en utilisant les features de test de foundry
+- premier déploiement, tester avec genre 10 centimes sur un L2

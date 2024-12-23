@@ -2,7 +2,7 @@
 pragma solidity ^0.8.7;
 pragma abicoder v2;
 
-import "./TransferHelper.sol";
+import "../helpers/TransferHelper.sol";
 import "@v3-periphery/interfaces/ISwapRouter.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,25 +16,25 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 tokenAAmount;
         uint256 tokenBAmount;
     }
-    mapping(address => UserData) user_to_user_data;
 
-    mapping(string => bytes32) token_name_to_price_id;
-    mapping(string => IERC20) token_name_to_token;
+    struct TokenData {
+        IERC20 token;
+        AggregatorV3Interface priceDataFetcher;
+    }
+
+    mapping(string => TokenData) tokenTickerToTokenData;
+    mapping(address => UserData) userToUserData;
+
 
     uint256 mintFeeBalance;
-
     uint256 public immutable mintPrice = 1;
 
-    IERC20 public immutable tokenA;
-    IERC20 public immutable tokenB;
-    IERC20 public immutable stablecoin;
     IERC20 public psv;
 
-    string tokenAName;
-    string tokenBName;
+    string tokenATicker;
+    string tokenBTicker;
+    string stablecoinTicker;
 
-    AggregatorV3Interface internal tokenADataFeed;
-    AggregatorV3Interface internal tokenBDataFeed;
 
     event FeeCollected(address user, uint256 feeAmount);
 
@@ -71,64 +71,29 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
     constructor(
         ISwapRouter _swapRouter,
-        address _pyth,
-        bytes32 _tokenBUsdPriceId,
-        bytes32 _tokenAUsdPriceId,
-        bytes32 _stablecoinUsdPriceId,
-        IERC20 _tokenA,
-        IERC20 _tokenB,
-        string _tokenAName,
-        string _tokenBName,
-        IERC20 _stablecoin,
-        IERC20 _psv,
+        address _tokenA,
+        address _tokenB,
+        address _stablecoin,
+        string _tokenATicker,
+        string _tokenBTicker,
+        string _stablecoinTicker
+        address _psv,
         address _tokenADataFeed,
         address _tokenBDataFeed
+        address _stablecoinDataFeed
     ) {
         swapRouter = _swapRouter;
-        pyth = IPyth(_pyth);
-        tokenAUsdPriceId = _tokenAUsdPriceId;
-        tokenBUsdPriceId = _tokenBUsdPriceId;
-        stablecoinUsdPriceId = _stablecoinUsdPriceId;
 
-        tokenA = _tokenA;
-        tokenB = _tokenB;
-        tokenAName = _tokenAName;
-        tokenBName = _tokenBName;
-        stablecoin = _stablecoin;
-        psv = _psv;
+        tokenATicker = _tokenATicker;
+        tokenBTicker = _tokenBTicker;
+        stablecoinTicker = _stablecoinTicker;
 
-        token_name_to_price_id[tokenAName] = tokenAUsdPriceId;
-        token_name_to_price_id[tokenBName] = tokenBUsdPriceId;
-        token_name_to_price_id["stablecoin"] = stablecoinUsdPriceId;
-
-        token_name_to_token[tokenAName] = tokenA;
-        token_name_to_token[tokenBName] = tokenB;
-        token_name_to_token["stablecoin"] = stablecoin;
-
-        tokenADataFeed = AggregatorV3Interface(_tokenADataFeed);
-        tokenBDataFeed = AggregatorV3Interface(_tokenBDataFeed);
-    }
-
-    function fetchPrice(string memory tokenName) public view returns (uint256) {
-        bytes32 priceId = token_name_to_price_id[tokenName];
-
-        PythStructs.Price memory price = pyth.getPriceNoOlderThan(priceId, 60);
-
-        uint price18Decimals = (uint(uint64(price.price)) * (10 ** 18)) /
-            (10 ** uint8(uint32(-1 * price.expo)));
-        console.log(price18Decimals);
-        return price18Decimals;
-    }
-
-    function computeIERC20MarketCap(
-        string memory tokenName
-    ) public view returns (uint256) {
-        if (tokenName == "WBTC") {
-            return fetchPrice("WBTC") * 21000000;
-        }
-        uint256 price = fetchPrice(tokenName);
-        IERC20 token = token_name_to_token[tokenName];
-        return price * token.totalSupply();
+        tokenTickerToTokenData[tokenATicker].token = IERC20(_tokenA);
+        tokenTickerToTokenData[tokenATicker].priceDataFetcher = AggregatorV3Interface(_tokenADataFeed);
+        tokenTickerToTokenData[tokenBTicker].token = IERC20(_tokenB);
+        tokenTickerToTokenData[tokenBTicker].priceDataFetcher = AggregatorV3Interface(_tokenBDataFeed);
+        tokenTickerToTokenData[stablecoinTicker].token = IERC20(_stablecoin);
+        tokenTickerToTokenData[stablecoinTicker].priceDataFetcher = AggregatorV3Interface(_stablecoinDataFeed);
     }
 
     function mintShare(
@@ -149,35 +114,34 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 mint_fee = stablecoinAmount / 1000;
         mintFeeBalance += mint_fee;
 
-        uint256 tokenAMarketCap = computeIERC20MarketCap(tokenAName);
-        uint256 tokenBMarketCap = computeIERC20MarketCap(tokenBName);
+        uint256 tokenAMarketCap = _computeTokenMarketCap(tokenATicker);
+        uint256 tokenBMarketCap = _computeTokenMarketCap(tokenBTicker);
 
-        uint256 totalMarketCap = tokenAMarketCap + tokenBMarketCap;
-        uint256 tokenAIndexShare = tokenAMarketCap / totalMarketCap;
+        uint256 tokenAIndexShare = (tokenAMarketCap + tokenBMarketCap) * 100 / totalMarketCap;
 
         uint256 stablecoinToInvest = stablecoinAmount - mint_fee;
-        uint256 amountToInvestInTokenA = stablecoinToInvest * tokenAIndexShare;
+        uint256 amountToInvestInTokenA = stablecoinToInvest * tokenAIndexShare / 100;
         uint256 amountToInvestInTokenB = stablecoinToInvest -
             amountToInvestInTokenA;
 
-        uint256 tokenAAmount = swap(
+        uint256 tokenAAmount = _swap(
             address(stablecoin),
             address(tokenA),
             amountToInvestInTokenA,
             3000
         );
-        uint256 tokenBAmount = swap(
+        uint256 tokenBAmount = _swap(
             address(stablecoin),
             address(tokenB),
             amountToInvestInTokenB,
             3000
         );
 
-        user_to_user_data[msg.sender].tokenAAmount += tokenAAmount;
-        user_to_user_data[msg.sender].tokenBAmount += tokenBAmount;
+        userToUserData[msg.sender].tokenAAmount += tokenAAmount;
+        userToUserData[msg.sender].tokenBAmount += tokenBAmount;
 
         uint256 sharesToMint = stablecoinToInvest / mintPrice;
-        user_to_user_data[msg.sender].mintedShares += sharesToMint;
+        userToUserData[msg.sender].mintedShares += sharesToMint;
         psv.mint(msg.sender, sharesToMint);
     }
 
@@ -186,22 +150,25 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     function burnShare(
         uint256 amount
     ) allowanceChecker(psv, msg.sender, address(this), amount) {
+        
         UserData userData = userToUserData[msg.sender];
-        uint256 sharesBurnedProportion = (amount * 100) / userData.mintedShares;
+        uint256 userMintedShares = userData.mintedShares;
+        require(amount <= userMintedShares, "Amount too big");
 
-        uint256 tokenAToSwap = (userData.tokenAAmount * 100) /
-            sharesBurnedProportion;
-        uint256 tokenBToSwap = (userData.tokenBAmount * 100) /
-            sharesBurnedProportion;
-        uint256 stablecoinToSend = swap(tokenA, stablecoin, tokenAToSwap) +
-            swap(tokenB, stablecoin, tokenBToSwap);
+        uint256 sharesBurnedProportion = (amount * 100) / userMintedShares;
+        uint256 tokenAToSwap = (userData.tokenAAmount * sharesBurnedProportion) /
+            100;
+        uint256 tokenBToSwap = (userData.tokenBAmount * sharesBurnedProportion) /
+            100;
+        uint256 stablecoinToSend = _swap(tokenA, stablecoin, tokenAToSwap) +
+            _swap(tokenB, stablecoin, tokenBToSwap);
 
-        user_to_user_data[msg.sender].mintedShares -= amount / mintPrice;
+        userToUserData[msg.sender].mintedShares -= amount;
         psv.burn(msg.sender, amount);
         stablecoin.transfer(msg.sender, stablecoinToSend);
     }
 
-    function swap(
+    function _swap(
         address tokenA,
         address tokenB,
         uint256 amountIn,
@@ -222,5 +189,33 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             });
 
         amountOut = swapRouter.exactInputSingle(params);
+    }
+
+    function _getTokenPrice(
+        AggregatorV3Interface tokenDataFeed
+    ) internal view returns (int) {
+        // prettier-ignore
+        (
+            /* uint80 roundID */,
+            int answer,
+            /*uint startedAt*/,
+            /*uint timeStamp*/,
+            /*uint80 answeredInRound*/
+        ) = tokenDataFeed.latestRoundData();
+        return answer;
+    }
+
+    function _computeTokenMarketCap(
+        string memory tokenTicker
+    ) internal view returns (uint256) {
+        require(tokenTicker == tokenATicker || tokenTicker == tokenBTicker || tokenTicker == stablecoinTicker, "Wrong ticker!");
+        if (tokenTicker == "WBTC") {
+            return _getTokenPrice("WBTC") * 21000000;
+        }
+        // Need to do the ETH case
+        TokenData data = tokenTickerToTokenData[tokenTicker]
+        uint256 price = _getTokenPrice(data.priceDataFetcher);
+        IERC20 token = data.tokenAddress;
+        return price * token.totalSupply();
     }
 }
