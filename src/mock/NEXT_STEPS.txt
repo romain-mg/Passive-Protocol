@@ -1,5 +1,4 @@
 Next steps:
-- Voir quelle supply utiliser pour wbtc et eth
-- Trouver un moyen de calculer la marketcap de eth (voir si Chainlink donne de la data sur la total supply?)
+- Probablement mieux de stocker les tokens avec les adresses et convertir en erc20 quand nécessaire ET ETH N EST PAS UN ERC 20!!
 - Tester toutes mes fonctions en utilisant les features de test de foundry
 - premier déploiement, tester avec genre 10 centimes sur un L2
