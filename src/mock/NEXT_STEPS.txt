@@ -1,5 +1,0 @@
-Next steps:
-- Faire des tests avec différents token prices
-- premier déploiement, tester avec genre 10 centimes sur un L2
-
-Idées pour optimiser
