@@ -7,7 +7,9 @@ import {stdError} from "forge-std-1.9.5/src/StdError.sol";
 import "../src/mock/MockWBTC.sol";
 import "../src/mock/MockWETH.sol";
 import "../src/mock/MockUSDC.sol";
-import "../src/mock/MockAggregatorV3.sol";
+import "../src/mock/MockWBTCAggregatorV3.sol";
+import "../src/mock/MockWETHAggregatorV3.sol";
+import "../src/mock/MockUSDCAggregatorV3.sol";
 import "../src/mock/MockSwapRouter.sol";
 import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "../src/core/IndexFund.sol";
@@ -18,7 +20,9 @@ contract IndexFundTest is Test {
     MockWBTC mockWBTC;
     MockWETH mockWETH;
     MockUSDC mockUSDC;
-    MockAggregatorV3 mockAggregator;
+    MockWBTCAggregatorV3 mockWBTCAggregator;
+    MockWETHAggregatorV3 mockWETHAggregator;
+    MockUSDCAggregatorV3 mockUSDCAggregator;
     MockSwapRouter mockSwapRouter;
     PSVToken psv;
     IndexFund indexFund;
@@ -31,7 +35,9 @@ contract IndexFundTest is Test {
         mockWBTC = new MockWBTC();
         mockWETH = new MockWETH();
         mockUSDC = new MockUSDC();
-        mockAggregator = new MockAggregatorV3();
+        mockWBTCAggregator = new MockWBTCAggregatorV3();
+        mockWETHAggregator = new MockWETHAggregatorV3();
+        mockUSDCAggregator = new MockUSDCAggregatorV3();
         mockSwapRouter = new MockSwapRouter();
         psv = new PSVToken();
         indexFund = new IndexFund(
@@ -39,13 +45,13 @@ contract IndexFundTest is Test {
             address(mockWBTC),
             address(mockWETH),
             address(mockUSDC),
-            "WBTC",
-            "WETH",
-            "USDC",
+            bytes32(abi.encodePacked("WBTC")),
+            bytes32(abi.encodePacked("WETH")),
+            bytes32(abi.encodePacked("USDC")),
             address(psv),
-            address(mockAggregator),
-            address(mockAggregator),
-            address(mockAggregator)
+            address(mockWBTCAggregator),
+            address(mockWETHAggregator),
+            address(mockUSDCAggregator)
         );
 
         psv.setIndexFund(address(indexFund));
@@ -82,9 +88,10 @@ contract IndexFundTest is Test {
         assertEq(mintedShares, 999);
         assertEq(mockUSDC.balanceOf(address(indexFund)), 1);
 
-        (, int256 mockTokenPrice, , , ) = mockAggregator.latestRoundData();
-        uint256 mockWBTCMarketCap = uint256(mockTokenPrice) * 21_000_000;
-        uint256 mockWETHMarketCap = uint256(mockTokenPrice) * 120_450_000;
+        (, int256 mockWBTCPrice, , , ) = mockWBTCAggregator.latestRoundData();
+        (, int256 mockWETHPrice, , , ) = mockWETHAggregator.latestRoundData();
+        uint256 mockWBTCMarketCap = uint256(mockWBTCPrice) * 21_000_000;
+        uint256 mockWETHMarketCap = uint256(mockWETHPrice) * 120_450_000;
         uint256 amountWBTCSwapped = (999 * mockWBTCMarketCap) /
             (mockWBTCMarketCap + mockWETHMarketCap);
         uint256 amountWETHSwapped = 999 - amountWBTCSwapped;

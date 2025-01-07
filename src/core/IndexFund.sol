@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity ^0.8.20;
+pragma abicoder v2;
 
 import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
@@ -22,7 +23,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         AggregatorV3Interface priceDataFetcher;
     }
 
-    mapping(string => TokenData) public tokenTickerToTokenData;
+    mapping(bytes32 => TokenData) public tokenTickerToTokenData;
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintFeeBalance;
@@ -30,9 +31,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
     IPSVToken public psvToken;
 
-    string tokenATicker;
-    string tokenBTicker;
-    string stablecoinTicker;
+    bytes32 tokenATicker;
+    bytes32 tokenBTicker;
+    bytes32 stablecoinTicker;
 
     event FeeCollected(address indexed user, uint256 indexed feeAmount);
 
@@ -65,9 +66,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         address _tokenA,
         address _tokenB,
         address _stablecoin,
-        string memory _tokenATicker,
-        string memory _tokenBTicker,
-        string memory _stablecoinTicker,
+        bytes32 _tokenATicker,
+        bytes32 _tokenBTicker,
+        bytes32 _stablecoinTicker,
         address _psv,
         address _tokenADataFeed,
         address _tokenBDataFeed,
@@ -156,18 +157,23 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     }
 
     function burnShare(
-        uint256 amount
+        uint256 sharesToBurnAmount
     )
         public
-        allowanceChecker(address(psvToken), msg.sender, address(this), amount)
+        allowanceChecker(
+            address(psvToken),
+            msg.sender,
+            address(this),
+            sharesToBurnAmount
+        )
     {
         UserData memory userData = userToUserData[msg.sender];
         uint256 userMintedShares = userData.mintedShares;
-        require(amount <= userMintedShares, "Amount too big");
+        require(sharesToBurnAmount <= userMintedShares, "Amount too big");
 
-        uint256 tokenAAmount = (userData.tokenAAmount * amount) /
+        uint256 tokenAToSwap = (userData.tokenAAmount * sharesToBurnAmount) /
             userMintedShares;
-        uint256 tokenBAmount = (userData.tokenBAmount * amount) /
+        uint256 tokenBToSwap = (userData.tokenBAmount * sharesToBurnAmount) /
             userMintedShares;
 
         TokenData memory stablecoinData = tokenTickerToTokenData[
@@ -180,23 +186,23 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 stablecoinToSend = _swap(
             address(tokenAData.token),
             address(stablecoin),
-            tokenAAmount,
+            tokenAToSwap,
             3000
         ) +
             _swap(
                 address(tokenBData.token),
                 address(stablecoin),
-                tokenBAmount,
+                tokenBToSwap,
                 3000
             );
 
-        userToUserData[msg.sender].mintedShares -= amount;
-        userToUserData[msg.sender].tokenAAmount -= tokenAAmount;
-        userToUserData[msg.sender].tokenBAmount -= tokenBAmount;
+        userToUserData[msg.sender].mintedShares -= sharesToBurnAmount;
+        userToUserData[msg.sender].tokenAAmount -= tokenAToSwap;
+        userToUserData[msg.sender].tokenBAmount -= tokenBToSwap;
 
-        psvToken.burn(msg.sender, amount);
+        psvToken.burn(msg.sender, sharesToBurnAmount);
         stablecoin.transfer(msg.sender, stablecoinToSend);
-        emit SharesBurned(msg.sender, amount, stablecoinToSend);
+        emit SharesBurned(msg.sender, sharesToBurnAmount, stablecoinToSend);
     }
 
     function _swap(
@@ -237,29 +243,21 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     }
 
     function _computeTokenMarketCap(
-        string memory tokenTicker
+        bytes32 tokenTicker
     ) internal view returns (uint256) {
-        bytes32 tokenTicketHash = keccak256(abi.encodePacked(tokenTicker));
         require(
-            tokenTicketHash == keccak256(abi.encodePacked(tokenATicker)) ||
-                tokenTicketHash == keccak256(abi.encodePacked(tokenBTicker)) ||
-                tokenTicketHash ==
-                keccak256(abi.encodePacked(stablecoinTicker)),
+            tokenTicker == tokenATicker ||
+                tokenTicker == tokenBTicker ||
+                tokenTicker == stablecoinTicker,
             "Wrong ticker!"
         );
-        if (tokenTicketHash == keccak256(abi.encodePacked("WBTC"))) {
-            return
-                _getTokenPrice(
-                    tokenTickerToTokenData["WBTC"].priceDataFetcher
-                ) * 21_000_000;
-        } else if (tokenTicketHash == keccak256(abi.encodePacked("WETH"))) {
-            return
-                _getTokenPrice(
-                    tokenTickerToTokenData["WETH"].priceDataFetcher
-                ) * 120_450_000;
-        }
         TokenData memory data = tokenTickerToTokenData[tokenTicker];
         uint256 price = _getTokenPrice(data.priceDataFetcher);
+        if (tokenTicker == bytes32(abi.encodePacked("WBTC"))) {
+            return price * 21_000_000;
+        } else if (tokenTicker == bytes32(abi.encodePacked("WETH"))) {
+            return price * 120_450_000;
+        }
         IERC20 token = data.token;
         return price * token.totalSupply();
     }
