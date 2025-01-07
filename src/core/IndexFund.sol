@@ -22,10 +22,10 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         AggregatorV3Interface priceDataFetcher;
     }
 
-    mapping(string => TokenData) tokenTickerToTokenData;
-    mapping(address => UserData) userToUserData;
+    mapping(string => TokenData) public tokenTickerToTokenData;
+    mapping(address => UserData) public userToUserData;
 
-    uint256 mintFeeBalance;
+    uint256 public mintFeeBalance;
     uint256 public immutable mintPrice = 1;
 
     IPSVToken public psvToken;
@@ -34,26 +34,18 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     string tokenBTicker;
     string stablecoinTicker;
 
-    event FeeCollected(address user, uint256 feeAmount);
+    event FeeCollected(address indexed user, uint256 indexed feeAmount);
 
-    event ShareMinted(address user, uint256 amount, uint256 stablecoinIn);
+    event SharesMinted(
+        address indexed user,
+        uint256 indexed amount,
+        uint256 indexed stablecoinIn
+    );
 
     event SharesBurned(
-        address user,
-        uint256 amount,
-        uint256 stablecoinReturned
-    );
-
-    event RebalancedtokenBSold(
-        uint256 tokenBSold,
-        uint256 tokenABought,
-        address caller
-    );
-
-    event RebalancedtokenASold(
-        uint256 tokenASold,
-        uint256 tokenBBought,
-        address caller
+        address indexed user,
+        uint256 indexed amount,
+        uint256 indexed stablecoinReturned
     );
 
     modifier allowanceChecker(
@@ -126,16 +118,14 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
         uint256 mintFee = stablecoinAmount / 1000;
         mintFeeBalance += mintFee;
+        emit FeeCollected(msg.sender, mintFee);
 
         uint256 tokenAMarketCap = _computeTokenMarketCap(tokenATicker);
         uint256 tokenBMarketCap = _computeTokenMarketCap(tokenBTicker);
 
-        uint256 tokenAIndexShare = (tokenAMarketCap * 100) /
-            (tokenAMarketCap + tokenBMarketCap);
-
         uint256 stablecoinToInvest = stablecoinAmount - mintFee;
         uint256 amountToInvestInTokenA = (stablecoinToInvest *
-            tokenAIndexShare) / 100;
+            tokenAMarketCap) / (tokenAMarketCap + tokenBMarketCap);
         uint256 amountToInvestInTokenB = stablecoinToInvest -
             amountToInvestInTokenA;
 
@@ -161,9 +151,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 sharesToMint = stablecoinToInvest / mintPrice;
         userToUserData[msg.sender].mintedShares += sharesToMint;
         psvToken.mint(msg.sender, sharesToMint);
-    }
 
-    // function rebalance();
+        emit SharesMinted(msg.sender, sharesToMint, stablecoinAmount);
+    }
 
     function burnShare(
         uint256 amount
@@ -175,36 +165,38 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 userMintedShares = userData.mintedShares;
         require(amount <= userMintedShares, "Amount too big");
 
-        uint256 sharesBurnedProportion = (amount * 100) / userMintedShares;
-        uint256 tokenAToSwap = (userData.tokenAAmount *
-            sharesBurnedProportion) / 100;
-        uint256 tokenBToSwap = (userData.tokenBAmount *
-            sharesBurnedProportion) / 100;
+        uint256 tokenAAmount = (userData.tokenAAmount * amount) /
+            userMintedShares;
+        uint256 tokenBAmount = (userData.tokenBAmount * amount) /
+            userMintedShares;
 
         TokenData memory stablecoinData = tokenTickerToTokenData[
             stablecoinTicker
         ];
         TokenData memory tokenAData = tokenTickerToTokenData[tokenATicker];
         TokenData memory tokenBData = tokenTickerToTokenData[tokenBTicker];
-
         IERC20 stablecoin = stablecoinData.token;
 
         uint256 stablecoinToSend = _swap(
             address(tokenAData.token),
             address(stablecoin),
-            tokenAToSwap,
+            tokenAAmount,
             3000
         ) +
             _swap(
                 address(tokenBData.token),
                 address(stablecoin),
-                tokenBToSwap,
+                tokenBAmount,
                 3000
             );
 
         userToUserData[msg.sender].mintedShares -= amount;
+        userToUserData[msg.sender].tokenAAmount -= tokenAAmount;
+        userToUserData[msg.sender].tokenBAmount -= tokenBAmount;
+
         psvToken.burn(msg.sender, amount);
         stablecoin.transfer(msg.sender, stablecoinToSend);
+        emit SharesBurned(msg.sender, amount, stablecoinToSend);
     }
 
     function _swap(
@@ -260,14 +252,26 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
                 _getTokenPrice(
                     tokenTickerToTokenData["WBTC"].priceDataFetcher
                 ) * 21_000_000;
-        } else if (tokenTicketHash == keccak256(abi.encodePacked("ETH"))) {
+        } else if (tokenTicketHash == keccak256(abi.encodePacked("WETH"))) {
             return
-                _getTokenPrice(tokenTickerToTokenData["ETH"].priceDataFetcher) *
-                120_450_000;
+                _getTokenPrice(
+                    tokenTickerToTokenData["WETH"].priceDataFetcher
+                ) * 120_450_000;
         }
         TokenData memory data = tokenTickerToTokenData[tokenTicker];
         uint256 price = _getTokenPrice(data.priceDataFetcher);
         IERC20 token = data.token;
         return price * token.totalSupply();
+    }
+
+    function getUserData(
+        address userAddress
+    ) public returns (uint256, uint256, uint256) {
+        UserData memory userData = userToUserData[userAddress];
+        return (
+            userData.mintedShares,
+            userData.tokenAAmount,
+            userData.tokenBAmount
+        );
     }
 }
