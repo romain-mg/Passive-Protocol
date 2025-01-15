@@ -3,17 +3,47 @@ pragma solidity ^0.8.20;
 import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
 import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "./MockToken.sol";
+import {console} from "forge-std-1.9.5/src/console.sol";
 
 contract MockSwapRouter is ISwapRouter {
+    address mockWBTCAddress;
+    address mockWETHAddress;
+    address mockUSDCAddress;
+    uint256 mockWBTCPrice;
+    uint256 mockWETHPrice;
+
+    constructor(
+        address _mockWBTCAddress,
+        address _mockWETHAddress,
+        address _mockUSDCAddress
+    ) {
+        mockWBTCAddress = _mockWBTCAddress;
+        mockWETHAddress = _mockWETHAddress;
+        mockUSDCAddress = _mockUSDCAddress;
+        mockWBTCPrice = 100;
+        mockWETHPrice = 4;
+    }
+
     function exactInputSingle(
         ExactInputSingleParams memory params
     ) external payable returns (uint256 amountOut) {
-        MockToken tokenIn = MockToken(params.tokenIn);
-        MockToken tokenOut = MockToken(params.tokenOut);
-        tokenIn.transferFrom(msg.sender, address(this), params.amountIn);
-        amountOut = params.amountIn;
-        tokenOut.mint(amountOut);
-        tokenOut.transfer(msg.sender, amountOut);
+        MockToken(params.tokenIn).burn(msg.sender, params.amountIn);
+        if (params.tokenOut == mockWBTCAddress) {
+            amountOut = params.amountIn / mockWBTCPrice;
+        } else if (params.tokenOut == mockWETHAddress) {
+            if (params.tokenIn == mockWBTCAddress) {
+                amountOut = (params.amountIn * mockWBTCPrice) / mockWETHPrice;
+            } else {
+                amountOut = params.amountIn / mockWETHPrice;
+            }
+        } else if (params.tokenOut == mockUSDCAddress) {
+            if (params.tokenIn == mockWBTCAddress) {
+                amountOut = params.amountIn * mockWBTCPrice;
+            } else if (params.tokenIn == mockWETHAddress) {
+                amountOut = params.amountIn * mockWETHPrice;
+            }
+        }
+        MockToken(params.tokenOut).mint(msg.sender, amountOut);
     }
 
     function exactInput(

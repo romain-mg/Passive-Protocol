@@ -16,6 +16,6 @@ contract MockWETHAggregatorV3 is IMockAggregatorV3 {
             uint80 answeredInRound
         )
     {
-        return (0, 4000, 0, 0, 0);
+        return (0, 4, 0, 0, 0);
     }
 }

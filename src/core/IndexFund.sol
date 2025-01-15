@@ -8,6 +8,7 @@ import "@openzeppelin-contracts-5.2.0-rc.1//utils/ReentrancyGuard.sol";
 import "../interfaces/IIndexFund.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "../interfaces/IPSVToken.sol";
+import {console} from "forge-std-1.9.5/src/console.sol";
 
 contract IndexFund is IIndexFund, ReentrancyGuard {
     ISwapRouter public immutable swapRouter;
@@ -26,8 +27,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     mapping(bytes32 => TokenData) public tokenTickerToTokenData;
     mapping(address => UserData) public userToUserData;
 
-    uint256 public mintFeeBalance;
     uint256 public mintPrice = 1;
+    uint256 public rebalancingFee = 1;
     uint256 public mintFeeDivisor = 1000;
     uint24 public uniswapPoolFee = 3000;
 
@@ -50,6 +51,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 indexed amount,
         uint256 indexed stablecoinReturned
     );
+
+    event Rebalanced(address indexed rebalancer, bool feeSent);
 
     modifier allowanceChecker(
         address token,
@@ -129,14 +132,14 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
         (
             uint256 stablecoinToInvest,
-            uint256 tokenAAmount,
-            uint256 tokenBAmount
+            uint256 tokenASwapped,
+            uint256 tokenBSwapped
         ) = _investUserStablecoin(stablecoin, stablecoinAmount);
 
         uint256 sharesToMint = stablecoinToInvest / mintPrice;
         userToUserData[msg.sender].mintedShares += sharesToMint;
-        userToUserData[msg.sender].tokenAAmount += tokenAAmount;
-        userToUserData[msg.sender].tokenBAmount += tokenBAmount;
+        userToUserData[msg.sender].tokenAAmount += tokenASwapped;
+        userToUserData[msg.sender].tokenBAmount += tokenBSwapped;
 
         psvToken.mint(msg.sender, sharesToMint);
         emit SharesMinted(msg.sender, sharesToMint, stablecoinAmount);
@@ -189,6 +192,95 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         emit SharesBurned(msg.sender, sharesToBurn, stablecoinToSend);
     }
 
+    function rebalance() public nonReentrant {
+        uint256 tokenABought = getTokenBought(tokenATicker);
+        uint256 tokenBBought = getTokenBought(tokenBTicker);
+
+        uint256 tokenAMarketCap = _getTokenMarketCap(
+            tokenTickerToTokenData[tokenATicker],
+            tokenATicker
+        );
+        uint256 tokenBMarketCap = _getTokenMarketCap(
+            tokenTickerToTokenData[tokenBTicker],
+            tokenBTicker
+        );
+
+        uint256 tokenATokenBCorrectRatio = (tokenAMarketCap * 1e18) /
+            tokenBMarketCap;
+
+        uint256 tokenAPrice = _getTokenPrice(tokenATicker);
+        uint256 tokenBPrice = _getTokenPrice(tokenBTicker);
+
+        uint256 tokenATokenBActualRatio = (tokenAPrice * tokenABought * 1e18) /
+            (tokenBPrice * tokenBBought);
+
+        if (
+            tokenATokenBActualRatio >= (tokenATokenBCorrectRatio * 98) / 100 &&
+            tokenATokenBActualRatio <= (tokenATokenBCorrectRatio * 102) / 100
+        ) {
+            revert("No need to rebalance");
+        }
+
+        if (tokenATokenBActualRatio < (tokenATokenBCorrectRatio * 98) / 100) {
+            // Need to sell tokenB to buy tokenA
+            uint256 targetTokenABalance = (tokenBPrice *
+                tokenBBought *
+                tokenAMarketCap) / (tokenBMarketCap * tokenAPrice);
+
+            uint256 tokenBToSell = ((targetTokenABalance - tokenABought) *
+                tokenAPrice) / tokenBPrice;
+
+            // Cap swap amount to avoid overselling
+            tokenBToSell = tokenBToSell > tokenBBought
+                ? tokenBBought
+                : tokenBToSell;
+
+            _swap(
+                address(tokenTickerToTokenData[tokenBTicker].token),
+                address(tokenTickerToTokenData[tokenATicker].token),
+                tokenBToSell,
+                0, // Minimum output ignored here; adapt in production
+                uniswapPoolFee
+            );
+        } else {
+            // Need to sell tokenA to buy tokenB
+            uint256 targetTokenBBalance = (tokenAPrice *
+                tokenABought *
+                tokenBMarketCap) / (tokenAMarketCap * tokenBPrice);
+
+            uint256 tokenAToSell = ((targetTokenBBalance - tokenBBought) *
+                tokenBPrice) / tokenAPrice;
+
+            // Cap swap amount to avoid overselling
+            tokenAToSell = tokenAToSell > tokenABought
+                ? tokenABought
+                : tokenAToSell;
+
+            _swap(
+                address(tokenTickerToTokenData[tokenATicker].token),
+                address(tokenTickerToTokenData[tokenBTicker].token),
+                tokenAToSell,
+                0, // Minimum output ignored here; adapt in production
+                uniswapPoolFee
+            );
+        }
+
+        IERC20 stablecoin = tokenTickerToTokenData[stablecoinTicker].token;
+        if (stablecoin.balanceOf(address(this)) > 0) {
+            bool transferSuccess = stablecoin.transfer(
+                msg.sender,
+                rebalancingFee
+            );
+            require(
+                transferSuccess,
+                "Failed to transfer stablecoin to user wallet"
+            );
+            emit Rebalanced(msg.sender, true);
+        } else {
+            emit Rebalanced(msg.sender, false);
+        }
+    }
+
     function _investUserStablecoin(
         IERC20 stablecoin,
         uint256 stablecoinAmount
@@ -196,15 +288,14 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         internal
         returns (
             uint256 stablecoinInvested,
-            uint256 tokenABought,
-            uint256 tokenBBought
+            uint256 tokenAAmount,
+            uint256 tokenBAmount
         )
     {
         uint256 mintFee = stablecoinAmount / mintFeeDivisor;
-        mintFeeBalance += mintFee;
         emit FeeCollected(msg.sender, mintFee);
 
-        uint256 stablecoinToInvest = stablecoinAmount - mintFee;
+        stablecoinInvested = stablecoinAmount - mintFee;
 
         TokenData memory tokenAData = tokenTickerToTokenData[tokenATicker];
         TokenData memory tokenBData = tokenTickerToTokenData[tokenBTicker];
@@ -217,29 +308,27 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         ) = _computeTokenSwapInfoWhenMint(
                 tokenAData,
                 tokenBData,
-                stablecoinToInvest
+                stablecoinInvested
             );
 
         // To fix: assumes the stablecoin is worth 1 dollar and not the real stablecoin price
         uint256 minimumTokenAOutput = amountToInvestInTokenA / tokenAPrice / 2;
         uint256 minimumTokenBOutput = amountToInvestInTokenB / tokenBPrice / 2;
 
-        uint256 tokenABought = _swap(
+        tokenAAmount = _swap(
             address(stablecoin),
             address(tokenAData.token),
             amountToInvestInTokenA,
             minimumTokenAOutput,
             uniswapPoolFee
         );
-        uint256 tokenBBought = _swap(
+        tokenBAmount = _swap(
             address(stablecoin),
             address(tokenBData.token),
             amountToInvestInTokenB,
             minimumTokenBOutput,
             uniswapPoolFee
         );
-
-        return (stablecoinToInvest, tokenABought, tokenBBought);
     }
 
     function _redeemUserStablecoin(
@@ -305,23 +394,16 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             uint256 amountToInvestInTokenB
         )
     {
-        uint256 tokenAPrice = _getTokenPrice(tokenATicker);
-        uint256 tokenBPrice = _getTokenPrice(tokenBTicker);
+        tokenAPrice = _getTokenPrice(tokenATicker);
+        tokenBPrice = _getTokenPrice(tokenBTicker);
 
         uint256 tokenAMarketCap = _getTokenMarketCap(tokenAData, tokenATicker);
         uint256 tokenBMarketCap = _getTokenMarketCap(tokenBData, tokenBTicker);
 
-        uint256 amountToInvestInTokenA = (stablecoinToInvest *
-            tokenAMarketCap) / (tokenAMarketCap + tokenBMarketCap);
-        uint256 amountToInvestInTokenB = stablecoinToInvest -
-            amountToInvestInTokenA;
-
-        return (
-            tokenAPrice,
-            tokenBPrice,
-            amountToInvestInTokenA,
-            amountToInvestInTokenB
-        );
+        amountToInvestInTokenA =
+            (stablecoinToInvest * tokenAMarketCap) /
+            (tokenAMarketCap + tokenBMarketCap);
+        amountToInvestInTokenB = stablecoinToInvest - amountToInvestInTokenA;
     }
 
     function _computeTokenSwapInfoWhenBurn(
@@ -338,15 +420,15 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             uint256 tokenBToSell
         )
     {
-        uint256 tokenAToSell = (userData.tokenAAmount * sharesToBurn) /
+        tokenAToSell =
+            (userData.tokenAAmount * sharesToBurn) /
             userMintedShares;
-        uint256 tokenBToSell = (userData.tokenBAmount * sharesToBurn) /
+        tokenBToSell =
+            (userData.tokenBAmount * sharesToBurn) /
             userMintedShares;
 
-        uint256 tokenAPrice = _getTokenPrice(tokenATicker);
-        uint256 tokenBPrice = _getTokenPrice(tokenBTicker);
-
-        return (tokenAPrice, tokenBPrice, tokenAToSell, tokenBToSell);
+        tokenAPrice = _getTokenPrice(tokenATicker);
+        tokenBPrice = _getTokenPrice(tokenBTicker);
     }
 
     function _swap(
@@ -376,26 +458,39 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     function _getTokenMarketCap(
         TokenData memory tokenData,
         bytes32 tokenTicker
-    ) internal view returns (uint256 tokenMarketCap) {
+    ) private view returns (uint256) {
+        return
+            _getTokenPrice(tokenTicker) *
+            _getTokenTotalSupply(tokenData, tokenTicker);
+    }
+
+    function _getTokenTotalSupply(
+        TokenData memory tokenData,
+        bytes32 tokenTicker
+    ) private view returns (uint256) {
         require(
             tokenTicker == tokenATicker ||
                 tokenTicker == tokenBTicker ||
                 tokenTicker == stablecoinTicker,
             "Wrong ticker!"
         );
-        uint256 price = _getTokenPrice(tokenTicker);
         if (tokenTicker == bytes32(abi.encodePacked("WBTC"))) {
-            return price * 21_000_000;
+            return 21_000_000;
         } else if (tokenTicker == bytes32(abi.encodePacked("WETH"))) {
-            return price * 120_450_000;
+            return 120_450_000;
         }
-        IERC20 token = tokenData.token;
-        return price * token.totalSupply();
+        return tokenData.token.totalSupply();
     }
 
     function _getTokenPrice(
         bytes32 tokenTicker
     ) internal view returns (uint256) {
+        require(
+            tokenTicker == tokenATicker ||
+                tokenTicker == tokenBTicker ||
+                tokenTicker == stablecoinTicker,
+            "Wrong ticker!"
+        );
         AggregatorV3Interface tokenDataFeed = tokenTickerToTokenData[
             tokenTicker
         ].priceDataFetcher;
@@ -415,6 +510,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         address userAddress
     )
         public
+        view
         returns (
             uint256 userMintedShares,
             uint256 userTokenAAmount,
@@ -427,5 +523,20 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             userData.tokenAAmount,
             userData.tokenBAmount
         );
+    }
+
+    function getSharesMintedNumber() public view returns (uint256) {
+        return psvToken.totalSupply();
+    }
+
+    function getMintFeeBalance() public view returns (uint256) {
+        return
+            tokenTickerToTokenData[stablecoinTicker].token.balanceOf(
+                address(this)
+            );
+    }
+
+    function getTokenBought(bytes32 ticker) public view returns (uint256) {
+        return tokenTickerToTokenData[ticker].token.balanceOf(address(this));
     }
 }

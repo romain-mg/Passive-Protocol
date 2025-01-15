@@ -9,7 +9,11 @@ contract MockToken is ERC20 {
         string memory tokenTicker
     ) ERC20(tokenName, tokenTicker) {}
 
-    function mint(uint256 amount) public {
-        super._mint(msg.sender, amount);
+    function mint(address user, uint256 amount) public {
+        super._mint(user, amount);
+    }
+
+    function burn(address user, uint256 amount) public {
+        super._burn(user, amount);
     }
 }

@@ -15,6 +15,7 @@ import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "../src/core/IndexFund.sol";
 import "../src/core/PSVToken.sol";
 import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
+import {console} from "forge-std-1.9.5/src/console.sol";
 
 contract IndexFundTest is Test {
     MockWBTC mockWBTC;
@@ -38,7 +39,11 @@ contract IndexFundTest is Test {
         mockWBTCAggregator = new MockWBTCAggregatorV3();
         mockWETHAggregator = new MockWETHAggregatorV3();
         mockUSDCAggregator = new MockUSDCAggregatorV3();
-        mockSwapRouter = new MockSwapRouter();
+        mockSwapRouter = new MockSwapRouter(
+            address(mockWBTC),
+            address(mockWETH),
+            address(mockUSDC)
+        );
         psv = new PSVToken();
         indexFund = new IndexFund(
             ISwapRouter(mockSwapRouter),
@@ -55,7 +60,7 @@ contract IndexFundTest is Test {
         );
 
         psv.setIndexFund(address(indexFund));
-        mockUSDC.mint(usdcMintAmount);
+        mockUSDC.mint(address(this), usdcMintAmount);
         defaultSender = address(this);
     }
 
@@ -79,27 +84,39 @@ contract IndexFundTest is Test {
     function test_Mint999Shares() public {
         mockUSDC.approve(address(indexFund), 1000);
         indexFund.mintShare(1000);
-        (
-            uint256 mintedShares,
-            uint256 tokenAAmount,
-            uint256 tokenBAmount
-        ) = indexFund.getUserData(defaultSender);
-        assertEq(indexFund.mintFeeBalance(), 1);
+        (uint256 mintedShares, , ) = indexFund.getUserData(defaultSender);
+        assertEq(indexFund.getMintFeeBalance(), 1);
         assertEq(mintedShares, 999);
         assertEq(mockUSDC.balanceOf(address(indexFund)), 1);
 
         (, int256 mockWBTCPrice, , , ) = mockWBTCAggregator.latestRoundData();
         (, int256 mockWETHPrice, , , ) = mockWETHAggregator.latestRoundData();
-        uint256 mockWBTCMarketCap = uint256(mockWBTCPrice) * 21_000_000;
-        uint256 mockWETHMarketCap = uint256(mockWETHPrice) * 120_450_000;
-        uint256 amountWBTCSwapped = (999 * mockWBTCMarketCap) /
-            (mockWBTCMarketCap + mockWETHMarketCap);
-        uint256 amountWETHSwapped = 999 - amountWBTCSwapped;
+        uint256 mockWBTCMarketCap = uint256(mockWBTCPrice) *
+            mockWBTC.mockTotalSupply();
+        uint256 mockWETHMarketCap = uint256(mockWETHPrice) *
+            mockWETH.mockTotalSupply();
+        (
+            ,
+            uint256 mockWBTCUserDataBalance,
+            uint256 mockWETHUserDataBalance
+        ) = indexFund.userToUserData(address(this));
 
-        assertEq(mockWBTC.balanceOf(address(indexFund)), amountWBTCSwapped);
-        assertEq(mockWETH.balanceOf(address(indexFund)), amountWETHSwapped);
-        assertEq(tokenAAmount, amountWBTCSwapped);
-        assertEq(tokenBAmount, amountWETHSwapped);
+        // Assert if user data correctly updates balances
+        assertEq(
+            mockWBTC.balanceOf(address(indexFund)),
+            mockWBTCUserDataBalance
+        );
+        assertEq(
+            mockWETH.balanceOf(address(indexFund)),
+            mockWETHUserDataBalance
+        );
+
+        // Assert if token ratios are correct according to the market cap of the tokens
+        assertEq(
+            mockWBTCMarketCap / mockWETHMarketCap,
+            (mockWBTCUserDataBalance * uint256(mockWBTCPrice)) /
+                (mockWETHUserDataBalance * uint256(mockWETHPrice))
+        );
     }
 
     function test_BurnShareNoAllowance() public {
@@ -130,6 +147,53 @@ contract IndexFundTest is Test {
         assertEq(mockUSDC.balanceOf(address(indexFund)), 1);
         assertEq(tokenAAmount, 0);
         assertEq(tokenBAmount, 0);
-        assertEq(mockUSDC.balanceOf(address(this)), usdcMintAmount - 1);
+        // To take into account that in mock swapper, all input token is burnt when you swap so you may not
+        // retrieve your full value when swapping back
+        uint256 usdcGivenBackAmount = usdcMintAmount - 15;
+        // -1 to take into account the minting fee
+        assertEq(mockUSDC.balanceOf(address(this)), usdcGivenBackAmount - 1);
+    }
+
+    function test_rebalance() public {
+        psv.approve(address(indexFund), 99999);
+        mockUSDC.approve(address(indexFund), 1000);
+        indexFund.mintShare(1000);
+        mockWBTC.mint(address(this), 1000);
+        // mockWBTC.transfer(address(indexFund), 1000);
+
+        (, int256 mockWBTCPrice, , , ) = mockWBTCAggregator.latestRoundData();
+        (, int256 mockWETHPrice, , , ) = mockWETHAggregator.latestRoundData();
+        uint256 mockWBTCMarketCap = uint256(mockWBTCPrice) *
+            mockWBTC.mockTotalSupply();
+        uint256 mockWETHMarketCap = uint256(mockWETHPrice) *
+            mockWETH.mockTotalSupply();
+        uint256 correctWBTCToWETHRatio = mockWBTCMarketCap / mockWETHMarketCap;
+
+        mockWBTC.mint(address(indexFund), 10);
+        console.log(
+            "Before wbtc balance",
+            mockWBTC.balanceOf(address(indexFund))
+        );
+        console.log(
+            "Before weth balance",
+            mockWETH.balanceOf(address(indexFund))
+        );
+        uint256 beforeRebalancingWBTCToWETHRatio = (uint256(mockWBTCPrice) *
+            mockWBTC.balanceOf(address(indexFund))) /
+            (uint256(mockWETHPrice) * mockWETH.balanceOf(address(indexFund)));
+        assertNotEq(correctWBTCToWETHRatio, beforeRebalancingWBTCToWETHRatio);
+        indexFund.rebalance();
+        uint256 afterRebalancingWBTCToWETHRatio = (uint256(mockWBTCPrice) *
+            mockWBTC.balanceOf(address(indexFund))) /
+            (uint256(mockWETHPrice) * mockWETH.balanceOf(address(indexFund)));
+        console.log(
+            "After wbtc balance",
+            mockWBTC.balanceOf(address(indexFund))
+        );
+        console.log(
+            "After weth balance",
+            mockWETH.balanceOf(address(indexFund))
+        );
+        assertEq(correctWBTCToWETHRatio, afterRebalancingWBTCToWETHRatio);
     }
 }
