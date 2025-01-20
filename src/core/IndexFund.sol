@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 pragma abicoder v2;
 
@@ -8,7 +8,8 @@ import "@openzeppelin-contracts-5.2.0-rc.1//utils/ReentrancyGuard.sol";
 import "../interfaces/IIndexFund.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "../interfaces/IPSVToken.sol";
-import {console} from "forge-std-1.9.5/src/console.sol";
+import "./MarketDataFetcher.sol";
+import "../lib/PassiveLibrary.sol";
 
 contract IndexFund is IIndexFund, ReentrancyGuard {
     ISwapRouter public immutable swapRouter;
@@ -19,12 +20,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 tokenBAmount;
     }
 
-    struct TokenData {
-        IERC20 token;
-        AggregatorV3Interface priceDataFetcher;
-    }
-
-    mapping(bytes32 => TokenData) public tokenTickerToTokenData;
+    mapping(bytes32 => PassiveLibrary.TokenData) public tokenTickerToTokenData;
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintPrice = 1;
@@ -34,9 +30,11 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
     IPSVToken public psvToken;
 
-    bytes32 tokenATicker;
-    bytes32 tokenBTicker;
-    bytes32 stablecoinTicker;
+    MarketDataFetcher marketDataFetcher;
+
+    bytes32 public tokenATicker;
+    bytes32 public tokenBTicker;
+    bytes32 public stablecoinTicker;
 
     event FeeCollected(address indexed user, uint256 indexed feeAmount);
 
@@ -96,6 +94,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             .priceDataFetcher = AggregatorV3Interface(_stablecoinDataFeed);
 
         psvToken = IPSVToken(_psv);
+
+        marketDataFetcher = new MarketDataFetcher();
     }
 
     function mintShare(
@@ -112,7 +112,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     {
         require(stablecoinAmount > 0, "You need to provide some stablecoin");
 
-        TokenData memory stablecoinData = tokenTickerToTokenData[
+        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
             stablecoinTicker
         ];
         IERC20 stablecoin = stablecoinData.token;
@@ -160,7 +160,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 userMintedShares = userData.mintedShares;
         require(sharesToBurn <= userMintedShares, "Amount too big");
 
-        TokenData memory stablecoinData = tokenTickerToTokenData[
+        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
             stablecoinTicker
         ];
         IERC20 stablecoin = stablecoinData.token;
@@ -196,11 +196,11 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 tokenABought = getTokenBought(tokenATicker);
         uint256 tokenBBought = getTokenBought(tokenBTicker);
 
-        uint256 tokenAMarketCap = _getTokenMarketCap(
+        uint256 tokenAMarketCap = marketDataFetcher._getTokenMarketCap(
             tokenTickerToTokenData[tokenATicker],
             tokenATicker
         );
-        uint256 tokenBMarketCap = _getTokenMarketCap(
+        uint256 tokenBMarketCap = marketDataFetcher._getTokenMarketCap(
             tokenTickerToTokenData[tokenBTicker],
             tokenBTicker
         );
@@ -208,8 +208,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 tokenATokenBCorrectRatio = (tokenAMarketCap * 1e18) /
             tokenBMarketCap;
 
-        uint256 tokenAPrice = _getTokenPrice(tokenATicker);
-        uint256 tokenBPrice = _getTokenPrice(tokenBTicker);
+        uint256 tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
+        uint256 tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
 
         uint256 tokenATokenBActualRatio = (tokenAPrice * tokenABought * 1e18) /
             (tokenBPrice * tokenBBought);
@@ -297,8 +297,12 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
         stablecoinInvested = stablecoinAmount - mintFee;
 
-        TokenData memory tokenAData = tokenTickerToTokenData[tokenATicker];
-        TokenData memory tokenBData = tokenTickerToTokenData[tokenBTicker];
+        PassiveLibrary.TokenData memory tokenAData = tokenTickerToTokenData[
+            tokenATicker
+        ];
+        PassiveLibrary.TokenData memory tokenBData = tokenTickerToTokenData[
+            tokenBTicker
+        ];
 
         (
             uint256 tokenAPrice,
@@ -359,8 +363,12 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 minimumStablecoinOutputA = (tokenAToSell * tokenAPrice) / 2;
         uint256 minimumStablecoinOutputB = (tokenBToSell * tokenBPrice) / 2;
 
-        TokenData memory tokenAData = tokenTickerToTokenData[tokenATicker];
-        TokenData memory tokenBData = tokenTickerToTokenData[tokenBTicker];
+        PassiveLibrary.TokenData memory tokenAData = tokenTickerToTokenData[
+            tokenATicker
+        ];
+        PassiveLibrary.TokenData memory tokenBData = tokenTickerToTokenData[
+            tokenBTicker
+        ];
 
         uint256 redemmedStablecoin = _swap(
             address(tokenAData.token),
@@ -381,8 +389,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     }
 
     function _computeTokenSwapInfoWhenMint(
-        TokenData memory tokenAData,
-        TokenData memory tokenBData,
+        PassiveLibrary.TokenData memory tokenAData,
+        PassiveLibrary.TokenData memory tokenBData,
         uint256 stablecoinToInvest
     )
         internal
@@ -394,11 +402,17 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             uint256 amountToInvestInTokenB
         )
     {
-        tokenAPrice = _getTokenPrice(tokenATicker);
-        tokenBPrice = _getTokenPrice(tokenBTicker);
+        tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
+        tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
 
-        uint256 tokenAMarketCap = _getTokenMarketCap(tokenAData, tokenATicker);
-        uint256 tokenBMarketCap = _getTokenMarketCap(tokenBData, tokenBTicker);
+        uint256 tokenAMarketCap = marketDataFetcher._getTokenMarketCap(
+            tokenAData,
+            tokenATicker
+        );
+        uint256 tokenBMarketCap = marketDataFetcher._getTokenMarketCap(
+            tokenBData,
+            tokenBTicker
+        );
 
         amountToInvestInTokenA =
             (stablecoinToInvest * tokenAMarketCap) /
@@ -427,8 +441,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             (userData.tokenBAmount * sharesToBurn) /
             userMintedShares;
 
-        tokenAPrice = _getTokenPrice(tokenATicker);
-        tokenBPrice = _getTokenPrice(tokenBTicker);
+        tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
+        tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
     }
 
     function _swap(
@@ -453,57 +467,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             });
 
         amountOut = swapRouter.exactInputSingle(params);
-    }
-
-    function _getTokenMarketCap(
-        TokenData memory tokenData,
-        bytes32 tokenTicker
-    ) private view returns (uint256) {
-        return
-            _getTokenPrice(tokenTicker) *
-            _getTokenTotalSupply(tokenData, tokenTicker);
-    }
-
-    function _getTokenTotalSupply(
-        TokenData memory tokenData,
-        bytes32 tokenTicker
-    ) private view returns (uint256) {
-        require(
-            tokenTicker == tokenATicker ||
-                tokenTicker == tokenBTicker ||
-                tokenTicker == stablecoinTicker,
-            "Wrong ticker!"
-        );
-        if (tokenTicker == bytes32(abi.encodePacked("WBTC"))) {
-            return 21_000_000;
-        } else if (tokenTicker == bytes32(abi.encodePacked("WETH"))) {
-            return 120_450_000;
-        }
-        return tokenData.token.totalSupply();
-    }
-
-    function _getTokenPrice(
-        bytes32 tokenTicker
-    ) internal view returns (uint256) {
-        require(
-            tokenTicker == tokenATicker ||
-                tokenTicker == tokenBTicker ||
-                tokenTicker == stablecoinTicker,
-            "Wrong ticker!"
-        );
-        AggregatorV3Interface tokenDataFeed = tokenTickerToTokenData[
-            tokenTicker
-        ].priceDataFetcher;
-        // prettier-ignore
-        (
-            /* uint80 roundID */,
-            int answer,
-            /*uint startedAt*/,
-            /*uint timeStamp*/,
-            /*uint80 answeredInRound*/
-        ) = tokenDataFeed.latestRoundData();
-        require(answer > 0, "Invalid price from oracle");
-        return uint256(answer);
     }
 
     function getUserData(
