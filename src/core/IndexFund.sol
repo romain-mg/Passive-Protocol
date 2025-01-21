@@ -239,7 +239,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
                 address(tokenTickerToTokenData[tokenBTicker].token),
                 address(tokenTickerToTokenData[tokenATicker].token),
                 tokenBToSell,
-                0, // Minimum output ignored here; adapt in production
+                (tokenBToSell * tokenBPrice) / tokenAPrice / 2,
                 uniswapPoolFee
             );
         } else {
@@ -260,7 +260,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
                 address(tokenTickerToTokenData[tokenATicker].token),
                 address(tokenTickerToTokenData[tokenBTicker].token),
                 tokenAToSell,
-                0, // Minimum output ignored here; adapt in production
+                (tokenAToSell * tokenAPrice) / tokenBPrice / 2,
                 uniswapPoolFee
             );
         }
@@ -315,22 +315,21 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
                 stablecoinInvested
             );
 
-        // To fix: assumes the stablecoin is worth 1 dollar and not the real stablecoin price
-        uint256 minimumTokenAOutput = amountToInvestInTokenA / tokenAPrice / 2;
-        uint256 minimumTokenBOutput = amountToInvestInTokenB / tokenBPrice / 2;
-
+        uint256 stablecoinPrice = marketDataFetcher._getTokenPrice(
+            stablecoinTicker
+        );
         tokenAAmount = _swap(
             address(stablecoin),
             address(tokenAData.token),
             amountToInvestInTokenA,
-            minimumTokenAOutput,
+            (amountToInvestInTokenA * stablecoinPrice) / tokenAPrice / 2,
             uniswapPoolFee
         );
         tokenBAmount = _swap(
             address(stablecoin),
             address(tokenBData.token),
             amountToInvestInTokenB,
-            minimumTokenBOutput,
+            (amountToInvestInTokenB * stablecoinPrice) / tokenBPrice / 2,
             uniswapPoolFee
         );
     }
