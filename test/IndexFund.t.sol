@@ -165,20 +165,20 @@ contract IndexFundTest is Test {
 
     function test_BurnShareNoAllowance() public {
         vm.expectRevert("Allowance too small");
-        indexFund.burnShare(1);
+        indexFund.burnShare(1, false);
     }
 
     function test_BurnShareNoSharesMinted() public {
         psv.approve(address(indexFund), 99999);
         vm.expectRevert("Amount too big");
-        indexFund.burnShare(1);
+        indexFund.burnShare(1, false);
     }
 
     function test_Burn999Shares() public {
         psv.approve(address(indexFund), 99999);
         mockUSDC.approve(address(indexFund), 1000);
         indexFund.mintShare(1000);
-        indexFund.burnShare(999);
+        indexFund.burnShare(999, false);
         (
             uint256 mintedShares,
             uint256 tokenAAmount,
@@ -214,7 +214,7 @@ contract IndexFundTest is Test {
         ) = indexFund.getUserData(defaultSender);
         uint256 fee = indexFund.getMintFeeBalance();
 
-        indexFund.burnShare(beforeMintedShares);
+        indexFund.burnShare(beforeMintedShares, false);
         (
             uint256 afterMintedShares,
             uint256 wbtcAfterBalance,
@@ -238,5 +238,30 @@ contract IndexFundTest is Test {
         // assertEq(mockUSDC.balanceOf(address(indexFund)), fee);
         assertEq(wbtcAfterBalance, 0);
         assertEq(wethAfterBalance, 0);
+    }
+
+    function test_fuzzBurnSharesRedeemIndexTokens(uint256 amount) public {
+        vm.assume(amount > 100 && amount < 1e30);
+
+        mockUSDC.mint(address(this), amount);
+        psv.approve(address(indexFund), amount);
+        mockUSDC.approve(address(indexFund), amount);
+        indexFund.mintShare(amount);
+
+        (uint256 beforeMintedShares, , ) = indexFund.getUserData(defaultSender);
+        uint256 wbtcBeforeBurnBalance = mockWBTC.balanceOf(address(this));
+        uint256 wethBeforeBurnBalance = mockWETH.balanceOf(address(this));
+
+        indexFund.burnShare(beforeMintedShares, true);
+
+        (uint256 afterMintedShares, , ) = indexFund.getUserData(defaultSender);
+        uint256 wbtcAfterBurnBalance = mockWBTC.balanceOf(address(this));
+        uint256 wethAfterBurnBalance = mockWETH.balanceOf(address(this));
+
+        assertEq(afterMintedShares, 0);
+        assertTrue(
+            wbtcAfterBurnBalance > wbtcBeforeBurnBalance &&
+                wethAfterBurnBalance > wethBeforeBurnBalance
+        );
     }
 }

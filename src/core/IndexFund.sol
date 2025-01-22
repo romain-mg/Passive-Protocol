@@ -43,11 +43,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 indexed stablecoinIn
     );
 
-    event SharesBurned(
-        address indexed user,
-        uint256 indexed amount,
-        uint256 indexed stablecoinReturned
-    );
+    event SharesBurned(address indexed user, uint256 indexed amount);
 
     modifier allowanceChecker(
         address token,
@@ -143,7 +139,8 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     }
 
     function burnShare(
-        uint256 sharesToBurn
+        uint256 sharesToBurn,
+        bool getBackIndexFundTokens
     )
         public
         allowanceChecker(
@@ -157,36 +154,63 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 userMintedShares = userData.mintedShares;
         require(sharesToBurn <= userMintedShares, "Amount too big");
 
-        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
-            stablecoinTicker
-        ];
-        IERC20 stablecoin = stablecoinData.token;
-
-        (
-            uint256 stablecoinToSend,
-            uint256 tokenASwapped,
-            uint256 tokenBSwapped
-        ) = _redeemUserStablecoin(
-                stablecoin,
-                userMintedShares,
-                sharesToBurn,
-                userData
+        if (getBackIndexFundTokens) {
+            bool tokenATransferSuccess = tokenTickerToTokenData[tokenATicker]
+                .token
+                .transfer(
+                    msg.sender,
+                    (userData.tokenAAmount * sharesToBurn) / userMintedShares
+                );
+            require(
+                tokenATransferSuccess,
+                "Failed to transfer token A to user wallet"
             );
 
-        userToUserData[msg.sender].mintedShares -= sharesToBurn;
-        userToUserData[msg.sender].tokenAAmount -= tokenASwapped;
-        userToUserData[msg.sender].tokenBAmount -= tokenBSwapped;
+            bool tokenBTransferSuccess = tokenTickerToTokenData[tokenBTicker]
+                .token
+                .transfer(
+                    msg.sender,
+                    (userData.tokenBAmount * sharesToBurn) / userMintedShares
+                );
+            require(
+                tokenBTransferSuccess,
+                "Failed to transfer token B to user wallet"
+            );
+        } else {
+            PassiveLibrary.TokenData
+                memory stablecoinData = tokenTickerToTokenData[
+                    stablecoinTicker
+                ];
+            IERC20 stablecoin = stablecoinData.token;
 
+            (
+                uint256 stablecoinToSend,
+                uint256 tokenASwapped,
+                uint256 tokenBSwapped
+            ) = _redeemUserStablecoin(
+                    stablecoin,
+                    userMintedShares,
+                    sharesToBurn,
+                    userData
+                );
+
+            userToUserData[msg.sender].tokenAAmount -= tokenASwapped;
+            userToUserData[msg.sender].tokenBAmount -= tokenBSwapped;
+
+            bool transferSuccess = stablecoin.transfer(
+                msg.sender,
+                stablecoinToSend
+            );
+            require(
+                transferSuccess,
+                "Failed to transfer stablecoin to user wallet"
+            );
+        }
+
+        userToUserData[msg.sender].mintedShares -= sharesToBurn;
         psvToken.burn(msg.sender, sharesToBurn);
-        bool transferSuccess = stablecoin.transfer(
-            msg.sender,
-            stablecoinToSend
-        );
-        require(
-            transferSuccess,
-            "Failed to transfer stablecoin to user wallet"
-        );
-        emit SharesBurned(msg.sender, sharesToBurn, stablecoinToSend);
+
+        emit SharesBurned(msg.sender, sharesToBurn);
     }
 
     function _investUserStablecoin(
@@ -266,7 +290,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
                 userData
             );
 
-        // To fix: assumes the stablecoin is worth 1 dollar and not the real stablecoin price
         uint256 minimumStablecoinOutputA = (tokenAToSell * tokenAPrice) / 2;
         uint256 minimumStablecoinOutputB = (tokenBToSell * tokenBPrice) / 2;
 
