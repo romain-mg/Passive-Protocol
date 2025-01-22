@@ -24,7 +24,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintPrice = 1;
-    uint256 public rebalancingFee = 1;
     uint256 public mintFeeDivisor = 1000;
     uint24 public uniswapPoolFee = 3000;
 
@@ -49,8 +48,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         uint256 indexed amount,
         uint256 indexed stablecoinReturned
     );
-
-    event Rebalanced(address indexed rebalancer, bool feeSent);
 
     modifier allowanceChecker(
         address token,
@@ -190,95 +187,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
             "Failed to transfer stablecoin to user wallet"
         );
         emit SharesBurned(msg.sender, sharesToBurn, stablecoinToSend);
-    }
-
-    function rebalance() public nonReentrant {
-        uint256 tokenABought = getTokenBought(tokenATicker);
-        uint256 tokenBBought = getTokenBought(tokenBTicker);
-
-        uint256 tokenAMarketCap = marketDataFetcher._getTokenMarketCap(
-            tokenTickerToTokenData[tokenATicker],
-            tokenATicker
-        );
-        uint256 tokenBMarketCap = marketDataFetcher._getTokenMarketCap(
-            tokenTickerToTokenData[tokenBTicker],
-            tokenBTicker
-        );
-
-        uint256 tokenATokenBCorrectRatio = (tokenAMarketCap * 1e18) /
-            tokenBMarketCap;
-
-        uint256 tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
-        uint256 tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
-
-        uint256 tokenATokenBActualRatio = (tokenAPrice * tokenABought * 1e18) /
-            (tokenBPrice * tokenBBought);
-
-        if (
-            tokenATokenBActualRatio >= (tokenATokenBCorrectRatio * 98) / 100 &&
-            tokenATokenBActualRatio <= (tokenATokenBCorrectRatio * 102) / 100
-        ) {
-            revert("No need to rebalance");
-        }
-
-        if (tokenATokenBActualRatio < (tokenATokenBCorrectRatio * 98) / 100) {
-            // Need to sell tokenB to buy tokenA
-            uint256 targetTokenABalance = (tokenBPrice *
-                tokenBBought *
-                tokenAMarketCap) / (tokenBMarketCap * tokenAPrice);
-
-            uint256 tokenBToSell = ((targetTokenABalance - tokenABought) *
-                tokenAPrice) / tokenBPrice;
-
-            // Cap swap amount to avoid overselling
-            tokenBToSell = tokenBToSell > tokenBBought
-                ? tokenBBought
-                : tokenBToSell;
-
-            _swap(
-                address(tokenTickerToTokenData[tokenBTicker].token),
-                address(tokenTickerToTokenData[tokenATicker].token),
-                tokenBToSell,
-                (tokenBToSell * tokenBPrice) / tokenAPrice / 2,
-                uniswapPoolFee
-            );
-        } else {
-            // Need to sell tokenA to buy tokenB
-            uint256 targetTokenBBalance = (tokenAPrice *
-                tokenABought *
-                tokenBMarketCap) / (tokenAMarketCap * tokenBPrice);
-
-            uint256 tokenAToSell = ((targetTokenBBalance - tokenBBought) *
-                tokenBPrice) / tokenAPrice;
-
-            // Cap swap amount to avoid overselling
-            tokenAToSell = tokenAToSell > tokenABought
-                ? tokenABought
-                : tokenAToSell;
-
-            _swap(
-                address(tokenTickerToTokenData[tokenATicker].token),
-                address(tokenTickerToTokenData[tokenBTicker].token),
-                tokenAToSell,
-                (tokenAToSell * tokenAPrice) / tokenBPrice / 2,
-                uniswapPoolFee
-            );
-        }
-
-        IERC20 stablecoin = tokenTickerToTokenData[stablecoinTicker].token;
-        if (stablecoin.balanceOf(address(this)) > 0) {
-            bool transferSuccess = stablecoin.transfer(
-                msg.sender,
-                rebalancingFee
-            );
-            require(
-                transferSuccess,
-                "Failed to transfer stablecoin to user wallet"
-            );
-            emit Rebalanced(msg.sender, true);
-        } else {
-            emit Rebalanced(msg.sender, false);
-        }
     }
 
     function _investUserStablecoin(
