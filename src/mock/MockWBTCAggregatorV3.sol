@@ -16,6 +16,6 @@ contract MockWBTCAggregatorV3 is IMockAggregatorV3 {
             uint80 answeredInRound
         )
     {
-        return (0, 100, 0, 0, 0);
+        return (0, 3, 0, 0, 0);
     }
 }

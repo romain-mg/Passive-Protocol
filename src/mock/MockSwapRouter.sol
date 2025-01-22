@@ -20,8 +20,8 @@ contract MockSwapRouter is ISwapRouter {
         mockWBTCAddress = _mockWBTCAddress;
         mockWETHAddress = _mockWETHAddress;
         mockUSDCAddress = _mockUSDCAddress;
-        mockWBTCPrice = 100;
-        mockWETHPrice = 4;
+        mockWBTCPrice = 3;
+        mockWETHPrice = 1;
     }
 
     function exactInputSingle(
