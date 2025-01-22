@@ -5,13 +5,14 @@ pragma abicoder v2;
 import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
 import "@openzeppelin-contracts-5.2.0-rc.1//utils/ReentrancyGuard.sol";
-import "../interfaces/IIndexFund.sol";
+import "@openzeppelin-contracts-5.2.0-rc.1/access/Ownable.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "../interfaces/IPSVToken.sol";
+import "../interfaces/IIndexFund.sol";
 import "./MarketDataFetcher.sol";
 import "../lib/PassiveLibrary.sol";
 
-contract IndexFund is IIndexFund, ReentrancyGuard {
+contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     ISwapRouter public immutable swapRouter;
 
     struct UserData {
@@ -69,7 +70,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
         address _tokenADataFeed,
         address _tokenBDataFeed,
         address _stablecoinDataFeed
-    ) {
+    ) Ownable(msg.sender) {
         swapRouter = _swapRouter;
 
         tokenATicker = _tokenATicker;
@@ -431,5 +432,17 @@ contract IndexFund is IIndexFund, ReentrancyGuard {
 
     function getTokenBought(bytes32 ticker) public view returns (uint256) {
         return tokenTickerToTokenData[ticker].token.balanceOf(address(this));
+    }
+
+    function withdrawFees() public onlyOwner {
+        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
+            stablecoinTicker
+        ];
+        IERC20 stablecoin = stablecoinData.token;
+        bool transferSuccess = stablecoin.transfer(
+            msg.sender,
+            stablecoin.balanceOf(address(this))
+        );
+        require(transferSuccess, "Failed to transfer mint fees to owner");
     }
 }
