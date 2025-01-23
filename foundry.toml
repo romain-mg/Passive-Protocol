@@ -38,6 +38,9 @@ arbitrum = "${ARBITRUM_RPC_URL}"
 [etherscan]
 arbitrum = { key = "${ARBISCAN_API_KEY}", url = "https://api.arbiscan.io/api" }
 
+[gas_reports]
+gas_reports = ["IndexFund"]
+
 
 
 

@@ -25,7 +25,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintPrice = 1;
-    uint256 public mintFeeDivisor = 10000;
+    uint256 public mintFeeDivisor = 1000;
     uint24 public uniswapPoolFee = 3000;
 
     IPSVToken public psvToken;
