@@ -4,7 +4,7 @@ pragma abicoder v2;
 
 import "@uniswap-v3-periphery-1.4.4/libraries/TransferHelper.sol";
 import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
-import "@openzeppelin-contracts-5.2.0-rc.1//utils/ReentrancyGuard.sol";
+import "@openzeppelin-contracts-5.2.0-rc.1/utils/ReentrancyGuard.sol";
 import "@openzeppelin-contracts-5.2.0-rc.1/access/Ownable.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "../interfaces/IPSVToken.sol";
@@ -25,7 +25,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintPrice = 1;
-    uint256 public mintFeeDivisor = 1000;
+    uint256 public mintFeeDivisor = 10000;
     uint24 public uniswapPoolFee = 3000;
 
     IPSVToken public psvToken;
@@ -59,7 +59,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     }
 
     constructor(
-        ISwapRouter _swapRouter,
+        address _swapRouter,
         address _tokenA,
         address _tokenB,
         address _stablecoin,
@@ -71,7 +71,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         address _tokenBDataFeed,
         address _stablecoinDataFeed
     ) Ownable(msg.sender) {
-        swapRouter = _swapRouter;
+        swapRouter = ISwapRouter(_swapRouter);
 
         tokenATicker = _tokenATicker;
         tokenBTicker = _tokenBTicker;

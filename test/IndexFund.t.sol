@@ -46,7 +46,7 @@ contract IndexFundTest is Test {
         );
         psv = new PSVToken();
         indexFund = new IndexFund(
-            ISwapRouter(mockSwapRouter),
+            address(mockSwapRouter),
             address(mockWBTC),
             address(mockWETH),
             address(mockUSDC),
@@ -212,8 +212,6 @@ contract IndexFundTest is Test {
             uint256 wbtcBeforeBalance,
             uint256 wethBeforeBalance
         ) = indexFund.getUserData(defaultSender);
-        uint256 fee = indexFund.getMintFeeBalance();
-
         indexFund.burnShare(beforeMintedShares, false);
         (
             uint256 afterMintedShares,

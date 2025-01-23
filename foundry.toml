@@ -31,5 +31,15 @@ remappings_location = "txt"
 recursive_deps = true
 
 
+[rpc_endpoints]
+arbitrum = "${ARBITRUM_RPC_URL}"
+
+
+[etherscan]
+arbitrum = { key = "${ARBISCAN_API_KEY}", url = "https://api.arbiscan.io/api" }
+
+
+
+
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
