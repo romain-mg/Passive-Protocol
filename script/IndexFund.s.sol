@@ -16,10 +16,7 @@ contract IndexFundScript is Script {
             bytes32("WBTC"),
             bytes32("WETH"),
             bytes32("USDC"),
-            address(0xaE5252c9c1534E22385c3F2f8Bd646be11d01b78),
-            address(0xd0C7101eACbB49F3deCcCc166d238410D6D46d57),
-            address(0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612),
-            address(0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3)
+            address(0xaE5252c9c1534E22385c3F2f8Bd646be11d01b78)
         );
 
         vm.stopBroadcast();

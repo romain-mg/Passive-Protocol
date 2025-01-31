@@ -9,8 +9,7 @@ import "@openzeppelin-contracts-5.2.0-rc.1/access/Ownable.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "../interfaces/IPSVToken.sol";
 import "../interfaces/IIndexFund.sol";
-import "./MarketDataFetcher.sol";
-import "../lib/PassiveLibrary.sol";
+import "../lib/TokenDataFetcher.sol";
 
 contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     ISwapRouter public immutable swapRouter;
@@ -21,7 +20,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         uint256 tokenBAmount;
     }
 
-    mapping(bytes32 => PassiveLibrary.TokenData) public tokenTickerToTokenData;
+    mapping(bytes32 => address) public tokenTickerToToken;
     mapping(address => UserData) public userToUserData;
 
     uint256 public mintPrice = 1;
@@ -29,8 +28,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     uint24 public uniswapPoolFee = 3000;
 
     IPSVToken public psvToken;
-
-    MarketDataFetcher marketDataFetcher;
 
     bytes32 public tokenATicker;
     bytes32 public tokenBTicker;
@@ -66,10 +63,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         bytes32 _tokenATicker,
         bytes32 _tokenBTicker,
         bytes32 _stablecoinTicker,
-        address _psv,
-        address _tokenADataFeed,
-        address _tokenBDataFeed,
-        address _stablecoinDataFeed
+        address _psv
     ) Ownable(msg.sender) {
         swapRouter = ISwapRouter(_swapRouter);
 
@@ -77,42 +71,46 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         tokenBTicker = _tokenBTicker;
         stablecoinTicker = _stablecoinTicker;
 
-        tokenTickerToTokenData[tokenATicker].token = IERC20(_tokenA);
-        tokenTickerToTokenData[tokenATicker]
-            .priceDataFetcher = AggregatorV3Interface(_tokenADataFeed);
-        tokenTickerToTokenData[tokenBTicker].token = IERC20(_tokenB);
-        tokenTickerToTokenData[tokenBTicker]
-            .priceDataFetcher = AggregatorV3Interface(_tokenBDataFeed);
-        tokenTickerToTokenData[stablecoinTicker].token = IERC20(_stablecoin);
-        tokenTickerToTokenData[stablecoinTicker]
-            .priceDataFetcher = AggregatorV3Interface(_stablecoinDataFeed);
+        tokenTickerToToken[tokenATicker] = _tokenA;
+        tokenTickerToToken[tokenBTicker] = _tokenB;
+        tokenTickerToToken[stablecoinTicker] = _stablecoin;
 
         psvToken = IPSVToken(_psv);
 
-        marketDataFetcher = new MarketDataFetcher();
+        TransferHelper.safeApprove(
+            _tokenA,
+            address(swapRouter),
+            type(uint256).max
+        );
+        TransferHelper.safeApprove(
+            _tokenB,
+            address(swapRouter),
+            type(uint256).max
+        );
+
+        TransferHelper.safeApprove(
+            _stablecoin,
+            address(swapRouter),
+            type(uint256).max
+        );
     }
 
     function mintShare(
-        uint256 stablecoinAmount
-    )
-        public
-        allowanceChecker(
-            address(tokenTickerToTokenData[stablecoinTicker].token),
-            msg.sender,
-            address(this),
-            stablecoinAmount
-        )
-        nonReentrant
-    {
+        uint256 stablecoinAmount,
+        uint256 tokenAPrice,
+        uint256 tokenBPrice
+    ) public nonReentrant {
         require(stablecoinAmount > 0, "You need to provide some stablecoin");
 
-        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
-            stablecoinTicker
-        ];
-        IERC20 stablecoin = stablecoinData.token;
+        IERC20 stablecoin = IERC20(tokenTickerToToken[stablecoinTicker]);
+
         require(
             stablecoin.balanceOf(msg.sender) >= stablecoinAmount,
             "Not enough stablecoin in user wallet"
+        );
+        require(
+            stablecoin.allowance(msg.sender, address(this)) >= stablecoinAmount,
+            "Allowance too small"
         );
         bool transferSuccess = stablecoin.transferFrom(
             msg.sender,
@@ -128,7 +126,12 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
             uint256 stablecoinToInvest,
             uint256 tokenASwapped,
             uint256 tokenBSwapped
-        ) = _investUserStablecoin(stablecoin, stablecoinAmount);
+        ) = _investUserStablecoin(
+                stablecoin,
+                stablecoinAmount,
+                tokenAPrice,
+                tokenBPrice
+            );
 
         uint256 sharesToMint = stablecoinToInvest / mintPrice;
         userToUserData[msg.sender].mintedShares += sharesToMint;
@@ -141,7 +144,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
     function burnShare(
         uint256 sharesToBurn,
-        bool getBackIndexFundTokens
+        bool getBackIndexFundTokens,
+        uint256 tokenAPrice,
+        uint256 tokenBPrice
     )
         public
         allowanceChecker(
@@ -156,33 +161,27 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         require(sharesToBurn <= userMintedShares, "Amount too big");
 
         if (getBackIndexFundTokens) {
-            bool tokenATransferSuccess = tokenTickerToTokenData[tokenATicker]
-                .token
-                .transfer(
-                    msg.sender,
-                    (userData.tokenAAmount * sharesToBurn) / userMintedShares
-                );
+            IERC20 tokenA = IERC20(tokenTickerToToken[tokenATicker]);
+            IERC20 tokenB = IERC20(tokenTickerToToken[tokenBTicker]);
+            bool tokenATransferSuccess = tokenA.transfer(
+                msg.sender,
+                (userData.tokenAAmount * sharesToBurn) / userMintedShares
+            );
             require(
                 tokenATransferSuccess,
                 "Failed to transfer token A to user wallet"
             );
 
-            bool tokenBTransferSuccess = tokenTickerToTokenData[tokenBTicker]
-                .token
-                .transfer(
-                    msg.sender,
-                    (userData.tokenBAmount * sharesToBurn) / userMintedShares
-                );
+            bool tokenBTransferSuccess = tokenB.transfer(
+                msg.sender,
+                (userData.tokenBAmount * sharesToBurn) / userMintedShares
+            );
             require(
                 tokenBTransferSuccess,
                 "Failed to transfer token B to user wallet"
             );
         } else {
-            PassiveLibrary.TokenData
-                memory stablecoinData = tokenTickerToTokenData[
-                    stablecoinTicker
-                ];
-            IERC20 stablecoin = stablecoinData.token;
+            IERC20 stablecoin = IERC20(tokenTickerToToken[stablecoinTicker]);
 
             (
                 uint256 stablecoinToSend,
@@ -192,7 +191,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
                     stablecoin,
                     userMintedShares,
                     sharesToBurn,
-                    userData
+                    userData,
+                    tokenAPrice,
+                    tokenBPrice
                 );
 
             userToUserData[msg.sender].tokenAAmount -= tokenASwapped;
@@ -216,7 +217,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
     function _investUserStablecoin(
         IERC20 stablecoin,
-        uint256 stablecoinAmount
+        uint256 stablecoinAmount,
+        uint256 tokenAPrice,
+        uint256 tokenBPrice
     )
         internal
         returns (
@@ -230,39 +233,30 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
         stablecoinInvested = stablecoinAmount - mintFee;
 
-        PassiveLibrary.TokenData memory tokenAData = tokenTickerToTokenData[
-            tokenATicker
-        ];
-        PassiveLibrary.TokenData memory tokenBData = tokenTickerToTokenData[
-            tokenBTicker
-        ];
-
         (
-            uint256 tokenAPrice,
-            uint256 tokenBPrice,
             uint256 amountToInvestInTokenA,
             uint256 amountToInvestInTokenB
         ) = _computeTokenSwapInfoWhenMint(
-                tokenAData,
-                tokenBData,
-                stablecoinInvested
+                stablecoinInvested,
+                tokenAPrice,
+                tokenBPrice
             );
 
-        uint256 stablecoinPrice = marketDataFetcher._getTokenPrice(
-            stablecoinTicker
-        );
+        address tokenAAddress = address(tokenTickerToToken[tokenATicker]);
+        address tokenBAddress = address(tokenTickerToToken[tokenBTicker]);
+
         tokenAAmount = _swap(
             address(stablecoin),
-            address(tokenAData.token),
+            tokenAAddress,
             amountToInvestInTokenA,
-            (amountToInvestInTokenA * stablecoinPrice) / tokenAPrice / 2,
+            amountToInvestInTokenA / tokenAPrice / 2,
             uniswapPoolFee
         );
         tokenBAmount = _swap(
             address(stablecoin),
-            address(tokenBData.token),
+            tokenBAddress,
             amountToInvestInTokenB,
-            (amountToInvestInTokenB * stablecoinPrice) / tokenBPrice / 2,
+            amountToInvestInTokenB / tokenBPrice / 2,
             uniswapPoolFee
         );
     }
@@ -271,7 +265,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         IERC20 stablecoin,
         uint256 userMintedShares,
         uint256 sharesToBurn,
-        UserData memory userData
+        UserData memory userData,
+        uint256 tokenAPrice,
+        uint256 tokenBPrice
     )
         internal
         returns (
@@ -280,36 +276,26 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
             uint256 tokenBSold
         )
     {
-        (
-            uint256 tokenAPrice,
-            uint256 tokenBPrice,
-            uint256 tokenAToSell,
-            uint256 tokenBToSell
-        ) = _computeTokenSwapInfoWhenBurn(
-                sharesToBurn,
-                userMintedShares,
-                userData
-            );
+        uint256 tokenAToSell = (userData.tokenAAmount * sharesToBurn) /
+            userMintedShares;
+        uint256 tokenBToSell = (userData.tokenBAmount * sharesToBurn) /
+            userMintedShares;
 
         uint256 minimumStablecoinOutputA = (tokenAToSell * tokenAPrice) / 2;
         uint256 minimumStablecoinOutputB = (tokenBToSell * tokenBPrice) / 2;
 
-        PassiveLibrary.TokenData memory tokenAData = tokenTickerToTokenData[
-            tokenATicker
-        ];
-        PassiveLibrary.TokenData memory tokenBData = tokenTickerToTokenData[
-            tokenBTicker
-        ];
+        IERC20 tokenA = IERC20(tokenTickerToToken[tokenATicker]);
+        IERC20 tokenB = IERC20(tokenTickerToToken[tokenBTicker]);
 
         uint256 redemmedStablecoin = _swap(
-            address(tokenAData.token),
+            address(tokenA),
             address(stablecoin),
             tokenAToSell,
             minimumStablecoinOutputA,
             uniswapPoolFee
         ) +
             _swap(
-                address(tokenBData.token),
+                address(tokenB),
                 address(stablecoin),
                 tokenBToSell,
                 minimumStablecoinOutputB,
@@ -320,28 +306,25 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     }
 
     function _computeTokenSwapInfoWhenMint(
-        PassiveLibrary.TokenData memory tokenAData,
-        PassiveLibrary.TokenData memory tokenBData,
-        uint256 stablecoinToInvest
+        uint256 stablecoinToInvest,
+        uint256 tokenAPrice,
+        uint256 tokenBPrice
     )
         internal
         view
-        returns (
-            uint256 tokenAPrice,
-            uint256 tokenBPrice,
-            uint256 amountToInvestInTokenA,
-            uint256 amountToInvestInTokenB
-        )
+        returns (uint256 amountToInvestInTokenA, uint256 amountToInvestInTokenB)
     {
-        tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
-        tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
+        IERC20 tokenA = IERC20(tokenTickerToToken[tokenATicker]);
+        IERC20 tokenB = IERC20(tokenTickerToToken[tokenBTicker]);
 
-        uint256 tokenAMarketCap = marketDataFetcher._getTokenMarketCap(
-            tokenAData,
+        uint256 tokenAMarketCap = TokenDataFetcher._getTokenMarketCap(
+            uint256(tokenAPrice),
+            tokenA,
             tokenATicker
         );
-        uint256 tokenBMarketCap = marketDataFetcher._getTokenMarketCap(
-            tokenBData,
+        uint256 tokenBMarketCap = TokenDataFetcher._getTokenMarketCap(
+            uint256(tokenBPrice),
+            tokenB,
             tokenBTicker
         );
 
@@ -351,31 +334,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         amountToInvestInTokenB = stablecoinToInvest - amountToInvestInTokenA;
     }
 
-    function _computeTokenSwapInfoWhenBurn(
-        uint256 sharesToBurn,
-        uint256 userMintedShares,
-        UserData memory userData
-    )
-        internal
-        view
-        returns (
-            uint256 tokenAPrice,
-            uint256 tokenBPrice,
-            uint256 tokenAToSell,
-            uint256 tokenBToSell
-        )
-    {
-        tokenAToSell =
-            (userData.tokenAAmount * sharesToBurn) /
-            userMintedShares;
-        tokenBToSell =
-            (userData.tokenBAmount * sharesToBurn) /
-            userMintedShares;
-
-        tokenAPrice = marketDataFetcher._getTokenPrice(tokenATicker);
-        tokenBPrice = marketDataFetcher._getTokenPrice(tokenBTicker);
-    }
-
     function _swap(
         address tokenA,
         address tokenB,
@@ -383,8 +341,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         uint256 amountOutMinimum,
         uint24 poolFee
     ) private returns (uint256 amountOut) {
-        TransferHelper.safeApprove(tokenA, address(swapRouter), amountIn);
-
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
             .ExactInputSingleParams({
                 tokenIn: tokenA,
@@ -425,20 +381,17 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
     function getMintFeeBalance() public view returns (uint256) {
         return
-            tokenTickerToTokenData[stablecoinTicker].token.balanceOf(
+            IERC20(tokenTickerToToken[stablecoinTicker]).balanceOf(
                 address(this)
             );
     }
 
     function getTokenBought(bytes32 ticker) public view returns (uint256) {
-        return tokenTickerToTokenData[ticker].token.balanceOf(address(this));
+        return IERC20(tokenTickerToToken[ticker]).balanceOf(address(this));
     }
 
     function withdrawFees() public onlyOwner {
-        PassiveLibrary.TokenData memory stablecoinData = tokenTickerToTokenData[
-            stablecoinTicker
-        ];
-        IERC20 stablecoin = stablecoinData.token;
+        IERC20 stablecoin = IERC20(tokenTickerToToken[stablecoinTicker]);
         bool transferSuccess = stablecoin.transfer(
             msg.sender,
             stablecoin.balanceOf(address(this))

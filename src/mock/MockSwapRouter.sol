@@ -9,19 +9,21 @@ contract MockSwapRouter is ISwapRouter {
     address mockWBTCAddress;
     address mockWETHAddress;
     address mockUSDCAddress;
-    uint256 mockWBTCPrice;
-    uint256 mockWETHPrice;
+    uint256 mockWBTCPricePerUnit;
+    uint256 mockWETHPricePerUnit;
 
     constructor(
         address _mockWBTCAddress,
         address _mockWETHAddress,
-        address _mockUSDCAddress
+        address _mockUSDCAddress,
+        uint256 _mockWBTCPricePerUnit,
+        uint256 _mockWETHPricePerUnit
     ) {
         mockWBTCAddress = _mockWBTCAddress;
         mockWETHAddress = _mockWETHAddress;
         mockUSDCAddress = _mockUSDCAddress;
-        mockWBTCPrice = 3;
-        mockWETHPrice = 1;
+        mockWBTCPricePerUnit = _mockWBTCPricePerUnit;
+        mockWETHPricePerUnit = _mockWETHPricePerUnit;
     }
 
     function exactInputSingle(
@@ -29,18 +31,20 @@ contract MockSwapRouter is ISwapRouter {
     ) external payable returns (uint256 amountOut) {
         MockToken(params.tokenIn).burn(msg.sender, params.amountIn);
         if (params.tokenOut == mockWBTCAddress) {
-            amountOut = params.amountIn / mockWBTCPrice;
+            amountOut = params.amountIn / mockWBTCPricePerUnit;
         } else if (params.tokenOut == mockWETHAddress) {
             if (params.tokenIn == mockWBTCAddress) {
-                amountOut = (params.amountIn * mockWBTCPrice) / mockWETHPrice;
+                amountOut =
+                    (params.amountIn * mockWBTCPricePerUnit) /
+                    mockWETHPricePerUnit;
             } else {
-                amountOut = params.amountIn / mockWETHPrice;
+                amountOut = params.amountIn / mockWETHPricePerUnit;
             }
         } else if (params.tokenOut == mockUSDCAddress) {
             if (params.tokenIn == mockWBTCAddress) {
-                amountOut = params.amountIn * mockWBTCPrice;
+                amountOut = params.amountIn * mockWBTCPricePerUnit;
             } else if (params.tokenIn == mockWETHAddress) {
-                amountOut = params.amountIn * mockWETHPrice;
+                amountOut = params.amountIn * mockWETHPricePerUnit;
             }
         }
         MockToken(params.tokenOut).mint(msg.sender, amountOut);

@@ -33,12 +33,14 @@ recursive_deps = true
 
 [rpc_endpoints]
 arbitrum = "${ARBITRUM_RPC_URL}"
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
 
 
 [etherscan]
 arbitrum = { key = "${ARBISCAN_API_KEY}", url = "https://api.arbiscan.io/api" }
+arbitrum_sepolia = { key = "${ARBISCAN_API_KEY}", url = "https://api-sepolia.arbiscan.io/api" }
 
-[gas_reports]
+[profile.gas_reports]
 gas_reports = ["IndexFund"]
 
 
