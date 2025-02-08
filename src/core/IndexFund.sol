@@ -7,9 +7,9 @@ import "@uniswap-v3-periphery-1.4.4/interfaces/ISwapRouter.sol";
 import "@openzeppelin-contracts-5.2.0-rc.1/utils/ReentrancyGuard.sol";
 import "@openzeppelin-contracts-5.2.0-rc.1/access/Ownable.sol";
 import "@chainlink-contracts-1.3.0/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import "../interfaces/IPSVToken.sol";
 import "../interfaces/IIndexFund.sol";
 import "../lib/TokenDataFetcher.sol";
+import "./PSVToken.sol";
 
 contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     ISwapRouter public immutable swapRouter;
@@ -23,11 +23,11 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
     mapping(bytes32 => address) public tokenTickerToToken;
     mapping(address => UserData) public userToUserData;
 
-    uint256 public mintPrice = 1;
-    uint256 public mintFeeDivisor = 1000;
-    uint24 public uniswapPoolFee = 3000;
+    uint256 public immutable mintPrice;
+    uint256 public immutable mintFeeDivisor;
+    uint24 public immutable uniswapPoolFee;
 
-    IPSVToken public psvToken;
+    PSVToken public psvToken;
 
     bytes32 public tokenATicker;
     bytes32 public tokenBTicker;
@@ -43,18 +43,6 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
     event SharesBurned(address indexed user, uint256 indexed amount);
 
-    modifier allowanceChecker(
-        address token,
-        address allower,
-        address allowed,
-        uint256 amount
-    ) {
-        if (IERC20(token).allowance(allower, allowed) < amount) {
-            revert("Allowance too small");
-        }
-        _;
-    }
-
     constructor(
         address _swapRouter,
         address _tokenA,
@@ -63,7 +51,10 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         bytes32 _tokenATicker,
         bytes32 _tokenBTicker,
         bytes32 _stablecoinTicker,
-        address _psv
+        address _psv,
+        uint256 _mintPrice,
+        uint256 _mintFeeDivisor,
+        uint24 _uniswapPoolFee
     ) Ownable(msg.sender) {
         swapRouter = ISwapRouter(_swapRouter);
 
@@ -75,7 +66,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         tokenTickerToToken[tokenBTicker] = _tokenB;
         tokenTickerToToken[stablecoinTicker] = _stablecoin;
 
-        psvToken = IPSVToken(_psv);
+        psvToken = PSVToken(_psv);
 
         TransferHelper.safeApprove(
             _tokenA,
@@ -93,6 +84,10 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
             address(swapRouter),
             type(uint256).max
         );
+
+        mintPrice = _mintPrice;
+        mintFeeDivisor = _mintFeeDivisor;
+        uniswapPoolFee = _uniswapPoolFee;
     }
 
     function mintShare(
@@ -134,9 +129,10 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
             );
 
         uint256 sharesToMint = stablecoinToInvest / mintPrice;
-        userToUserData[msg.sender].mintedShares += sharesToMint;
-        userToUserData[msg.sender].tokenAAmount += tokenASwapped;
-        userToUserData[msg.sender].tokenBAmount += tokenBSwapped;
+        UserData storage userData = userToUserData[msg.sender];
+        userData.mintedShares += sharesToMint;
+        userData.tokenAAmount += tokenASwapped;
+        userData.tokenBAmount += tokenBSwapped;
 
         psvToken.mint(msg.sender, sharesToMint);
         emit SharesMinted(msg.sender, sharesToMint, stablecoinAmount);
@@ -147,25 +143,28 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         bool getBackIndexFundTokens,
         uint256 tokenAPrice,
         uint256 tokenBPrice
-    )
-        public
-        allowanceChecker(
-            address(psvToken),
-            msg.sender,
-            address(this),
-            sharesToBurn
-        )
-    {
-        UserData memory userData = userToUserData[msg.sender];
+    ) public {
+        require(
+            psvToken.allowance(msg.sender, address(this)) >= sharesToBurn,
+            "Allowance too small"
+        );
+        UserData storage userData = userToUserData[msg.sender];
         uint256 userMintedShares = userData.mintedShares;
         require(sharesToBurn <= userMintedShares, "Amount too big");
 
         if (getBackIndexFundTokens) {
             IERC20 tokenA = IERC20(tokenTickerToToken[tokenATicker]);
             IERC20 tokenB = IERC20(tokenTickerToToken[tokenBTicker]);
+            uint256 tokenAToTransfer = (userData.tokenAAmount * sharesToBurn) /
+                userMintedShares;
+            uint256 tokenBToTransfer = (userData.tokenBAmount * sharesToBurn) /
+                userMintedShares;
+            userData.tokenAAmount -= tokenAToTransfer;
+            userData.tokenBAmount -= tokenBToTransfer;
+            userData.mintedShares -= sharesToBurn;
             bool tokenATransferSuccess = tokenA.transfer(
                 msg.sender,
-                (userData.tokenAAmount * sharesToBurn) / userMintedShares
+                tokenAToTransfer
             );
             require(
                 tokenATransferSuccess,
@@ -174,7 +173,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
 
             bool tokenBTransferSuccess = tokenB.transfer(
                 msg.sender,
-                (userData.tokenBAmount * sharesToBurn) / userMintedShares
+                tokenBToTransfer
             );
             require(
                 tokenBTransferSuccess,
@@ -195,10 +194,9 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
                     tokenAPrice,
                     tokenBPrice
                 );
-
-            userToUserData[msg.sender].tokenAAmount -= tokenASwapped;
-            userToUserData[msg.sender].tokenBAmount -= tokenBSwapped;
-
+            userData.tokenAAmount -= tokenASwapped;
+            userData.tokenBAmount -= tokenBSwapped;
+            userData.mintedShares -= sharesToBurn;
             bool transferSuccess = stablecoin.transfer(
                 msg.sender,
                 stablecoinToSend
@@ -209,8 +207,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
             );
         }
 
-        userToUserData[msg.sender].mintedShares -= sharesToBurn;
-        psvToken.burn(msg.sender, sharesToBurn);
+        psvToken.burnFrom(msg.sender, sharesToBurn);
 
         emit SharesBurned(msg.sender, sharesToBurn);
     }
@@ -347,7 +344,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
                 tokenOut: tokenB,
                 fee: poolFee,
                 recipient: msg.sender,
-                deadline: block.timestamp,
+                deadline: block.timestamp + 300,
                 amountIn: amountIn,
                 amountOutMinimum: amountOutMinimum,
                 sqrtPriceLimitX96: 0

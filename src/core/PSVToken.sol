@@ -1,40 +1,22 @@
 // SPDX-License-Identifier: MIT
+// Compatible with OpenZeppelin Contracts ^5.0.0
+pragma solidity ^0.8.22;
 
-pragma solidity ^0.8.20;
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 
-import "@openzeppelin-contracts-5.2.0-rc.1/token/ERC20/ERC20.sol";
-import "@openzeppelin-contracts-5.2.0-rc.1/access/AccessControl.sol";
-import "../interfaces/IPSVToken.sol";
+contract PSVToken is ERC20, ERC20Burnable, Ownable {
+    bytes32 public constant INDEX_FUND_ROLE = keccak256("MINTER_ROLE");
 
-contract PSVToken is IPSVToken, ERC20, AccessControl {
-    bytes32 public constant INDEX_FUND_ROLE = keccak256("INDEX_FUND_ROLE");
-    address index_fund;
+    constructor()
+        ERC20("PSVToken", "PSV")
+        ERC20Burnable()
+        Ownable(msg.sender)
+    {}
 
-    constructor() ERC20("PSV Token", "PSV") {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-    }
-
-    function mint(
-        address investor,
-        uint256 amount
-    ) public onlyRole(INDEX_FUND_ROLE) {
-        super._mint(investor, amount);
-    }
-
-    function burn(
-        address investor,
-        uint256 amount
-    ) public onlyRole(INDEX_FUND_ROLE) {
-        _burn(investor, amount);
-    }
-
-    function setIndexFund(
-        address _index_fund
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_index_fund != address(0)) {
-            _revokeRole(INDEX_FUND_ROLE, _index_fund);
-        }
-        _grantRole(INDEX_FUND_ROLE, _index_fund);
-        index_fund = _index_fund;
+    function mint(address to, uint256 amount) public onlyOwner {
+        _mint(to, amount);
     }
 }

@@ -29,7 +29,9 @@ contract MockSwapRouter is ISwapRouter {
     function exactInputSingle(
         ExactInputSingleParams memory params
     ) external payable returns (uint256 amountOut) {
-        MockToken(params.tokenIn).burn(msg.sender, params.amountIn);
+        MockToken mockTokenIn = MockToken(params.tokenIn);
+        mockTokenIn.transferFrom(msg.sender, address(this), params.amountIn);
+        MockToken(params.tokenIn).burn(params.amountIn);
         if (params.tokenOut == mockWBTCAddress) {
             amountOut = params.amountIn / mockWBTCPricePerUnit;
         } else if (params.tokenOut == mockWETHAddress) {

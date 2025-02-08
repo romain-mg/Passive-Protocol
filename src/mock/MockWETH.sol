@@ -6,5 +6,5 @@ import "./MockToken.sol";
 contract MockWETH is MockToken {
     uint256 public mockTotalSupply = 120450000;
 
-    constructor() MockToken("Mock ETH", "METH") {}
+    constructor() MockToken("Mock WETH", "MWETH") {}
 }

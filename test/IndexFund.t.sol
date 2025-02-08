@@ -48,10 +48,13 @@ contract IndexFundTest is Test {
             bytes32(abi.encodePacked("WBTC")),
             bytes32(abi.encodePacked("WETH")),
             bytes32(abi.encodePacked("USDC")),
-            address(psv)
+            address(psv),
+            1,
+            1000,
+            3000
         );
 
-        psv.setIndexFund(address(indexFund));
+        psv.transferOwnership(address(indexFund));
         mockUSDC.mint(address(this), usdcMintAmount);
         defaultSender = address(this);
     }

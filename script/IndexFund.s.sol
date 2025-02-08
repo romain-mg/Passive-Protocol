@@ -8,6 +8,10 @@ contract IndexFundScript is Script {
     function run() external returns (IndexFund) {
         vm.startBroadcast();
 
+        uint256 mintPrice = 1;
+        uint256 mintFeeDivisor = 1000;
+        uint24 uniswapPoolFee = 3000;
+
         IndexFund indexFund = new IndexFund(
             address(0xE592427A0AEce92De3Edee1F18E0157C05861564),
             address(0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f),
@@ -16,7 +20,10 @@ contract IndexFundScript is Script {
             bytes32("WBTC"),
             bytes32("WETH"),
             bytes32("USDC"),
-            address(0xaE5252c9c1534E22385c3F2f8Bd646be11d01b78)
+            address(0xaE5252c9c1534E22385c3F2f8Bd646be11d01b78),
+            mintPrice,
+            mintFeeDivisor,
+            uniswapPoolFee
         );
 
         vm.stopBroadcast();
