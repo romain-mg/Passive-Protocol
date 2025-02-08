@@ -143,7 +143,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         bool getBackIndexFundTokens,
         uint256 tokenAPrice,
         uint256 tokenBPrice
-    ) public {
+    ) public nonReentrant {
         require(
             psvToken.allowance(msg.sender, address(this)) >= sharesToBurn,
             "Allowance too small"
@@ -357,7 +357,7 @@ contract IndexFund is IIndexFund, ReentrancyGuard, Ownable {
         address userAddress
     )
         public
-        view
+        nonReentrant
         returns (
             uint256 userMintedShares,
             uint256 userTokenAAmount,
